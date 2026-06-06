@@ -1,0 +1,22 @@
+# Build artifacts
+*.wasm
+*.soi
+*.zip
+wasm/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Go
+vendor/
+*.exe
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Binaryen (should be installed separately)
+binaryen-version_121/
