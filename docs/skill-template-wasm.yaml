@@ -1,0 +1,85 @@
+# ──────────────────── SOI Skill Manifest ────────────────────
+# 标准 WASM 插件模板
+# GOOS=wasip1 GOARCH=wasm go build -o wasm/plugin.wasm .
+# 普通 ToolHandler 签名，无 sandbox FS 权限
+# ───────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Skill
+
+# ========================================================================
+# metadata
+# ========================================================================
+metadata:
+  # 插件唯一标识，英文小写 + 短横线，与目录名一致
+  name: my-wasm-plugin
+
+  # 语义化版本号
+  version: 1.0.0
+
+  # 作者 / 团队
+  author: SOI Team
+
+  # 一句话简介，展示在插件市场
+  description: 一个标准 WASM 插件示例
+
+  # 分类标签（可选）
+  tags:
+    - wasm
+    - example
+
+# ========================================================================
+# spec
+# ========================================================================
+spec:
+  # ── 运行时 ──
+  runtime:
+    # 固定值 wasm — 标准 Go-WASM 运行时
+    type: wasm
+
+    # WASM 文件路径（相对于插件根目录）
+    entry: wasm/plugin.wasm
+
+    wasm:
+      # sandbox: 文件系统隔离
+      sandbox:
+        # 插件专用的 sandbox 子目录
+        subdir: plugins/my-wasm-plugin
+
+      # 单次工具调用超时
+      # 支持: s(秒) / m(分) / h(时)  例: 30s / 5m
+      timeout: 10s
+
+    # ── 环境变量（可选）──
+    # env:
+    #   - name: LOG_LEVEL
+    #     value: info
+
+  # ====================================================================
+  # provides
+  # ====================================================================
+  provides:
+    # ── 触发词（可选）：用户输入匹配到任一触发词时优先调度此插件 ──
+    triggers:
+      - "示例触发"
+      - "example trigger"
+
+    # ── 工具列表 ──
+    tools:
+      - name: my_tool              # 工具名，全局唯一，英文小写 + 下划线
+        description: 工具功能描述   # 帮助 LLM 选择正确的工具
+
+        # ── 参数（可选）──
+        parameters:
+          - name: input           # 参数名
+            type: string          # 类型: string | number | boolean | object | array
+            required: true        # 是否必填
+            default: ""           # 默认值（非必填时可设）
+            description: 输入参数说明
+            # ── 枚举约束（可选）──
+            # enum:
+            #   - option_a
+            #   - option_b
+
+        # 返回值描述（建议填写，帮助 LLM 理解输出结构）
+        returns: object with result

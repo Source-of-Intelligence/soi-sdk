@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Skill
+metadata:
+    name: xlsx2md
+    version: 1.0.0
+    author: SOI Team
+    description: 读取 XLSX 文件，将每个工作表转换为 Markdown 表格并写出。SOI 插件，具备 sandbox FS 读写权限，零外部 XML 依赖
+    tags:
+        - wasm
+        - soi
+        - converter
+        - xlsx
+        - markdown
+spec:
+    runtime:
+        type: soi
+        entry: wasm/plugin.soi
+        wasm:
+            sandbox:
+                subdir: /
+            timeout: 30s
+        uses:
+            - sandbox_fs
+    provides:
+        triggers:
+            - "转换 Excel"
+            - "xlsx 转 markdown"
+            - "excel 转 md"
+            - "表格转文本"
+            - "convert xlsx to md"
+            - "导出 Excel 为 Markdown"
+            - "把这个表格转成 md"
+            - "xlsx to markdown"
+            - "excel to markdown"
+            - "读取表格生成文档"
+        tools:
+            - name: xlsx_to_md
+              description: 读取 XLSX 文件，将每个工作表转换为 Markdown 表格格式并写入输出文件
+              parameters:
+                - name: source
+                  type: string
+                  required: true
+                  description: 沙箱中 XLSX 文件的路径
+                - name: output
+                  type: string
+                  required: false
+                  description: 输出的 .md 文件路径（默认：与源文件同名，扩展名改为 .md）
+                - name: sheet
+                  type: string
+                  required: false
+                  description: 要转换的指定工作表名称（留空则转换全部工作表）
+              returns: object with output_path / sheets_processed / sheet_names

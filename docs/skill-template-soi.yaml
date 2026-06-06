@@ -1,0 +1,101 @@
+# ──────────────────── SOI Skill Manifest ────────────────────
+# SOI 增强插件模板
+# 物理格式与 WASM 插件相同，但使用 SOIToolHandler 签名
+# 具备 sandbox FS 读写 / host 能力 (ReadFile / WriteFile / ListDir / Now / Log 等)
+# ───────────────────────────────────────────────────────────
+
+apiVersion: v1
+kind: Skill
+
+# ========================================================================
+# metadata
+# ========================================================================
+metadata:
+  # 插件唯一标识，英文小写 + 短横线，与目录名一致
+  name: my-soi-plugin
+
+  # 语义化版本号
+  version: 1.0.0
+
+  # 作者 / 团队
+  author: SOI Team
+
+  # 一句话简介，展示在插件市场
+  description: 一个 SOI 增强插件示例，具备 sandbox 文件系统读写能力
+
+  # 分类标签（可选）
+  tags:
+    - soi
+    - filesystem
+    - example
+
+# ========================================================================
+# spec
+# ========================================================================
+spec:
+  # ── 运行时 ──
+  runtime:
+    # 固定值 soi — 与 wasm 物理格式相同，但签名带 SandboxContext
+    type: soi
+
+    # WASM 文件路径（相对于插件根目录）
+    entry: wasm/plugin.wasm
+
+    wasm:
+      # sandbox: 文件系统隔离
+      sandbox:
+        # 插件专用的 sandbox 子目录
+        subdir: plugins/my-soi-plugin
+
+      # 单次工具调用超时
+      # SOI 插件通常涉及文件操作，建议设大一些
+      timeout: 30s
+
+    # ── 声明所需 host 能力（SOI 专用）──
+    uses:
+      # sandbox_fs  — sandbox 文件系统读写 (ReadFile / WriteFile / ListDir)
+      - sandbox_fs
+      # host_log    — 日志输出 (ctx.Host.Log)
+      # - host_log
+      # host_now    — 时间戳 (ctx.Host.Now)
+      # - host_now
+      # host_random — 安全随机数 (ctx.Host.Random)
+      # - host_random
+
+    # ── 环境变量（可选）──
+    # env:
+    #   - name: LOG_LEVEL
+    #     value: debug
+
+  # ====================================================================
+  # provides
+  # ====================================================================
+  provides:
+    # ── 触发词（可选）：用户输入匹配到任一触发词时优先调度此插件 ──
+    triggers:
+      - "处理文件"
+      - "读文件"
+      - "写文件"
+      - "process file"
+      - "read file"
+
+    # ── 工具列表 ──
+    tools:
+      - name: file_process         # 工具名，全局唯一，英文小写 + 下划线
+        description: 读取沙箱中的文件并进行处理
+
+        parameters:
+          - name: source           # 参数名
+            type: string           # 类型: string | number | boolean | object | array
+            required: true         # 是否必填
+            default: ""            # 默认值（非必填时可设）
+            description: 沙箱中的源文件路径
+
+          - name: output
+            type: string
+            required: false
+            default: ""
+            description: 输出文件路径（默认自动生成）
+
+        # 返回值描述（建议填写）
+        returns: object with output_path / result
