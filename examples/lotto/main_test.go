@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"soi.dev/soi-sdk"
+	"github.com/Source-of-Intelligence/soi-sdk"
 )
 
 // callTool 直接调用 sdk.ExecuteTool 执行工具

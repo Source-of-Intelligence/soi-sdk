@@ -13,7 +13,7 @@ import (
 	"sort"
 	"time"
 
-	"soi.dev/soi-sdk"
+	"github.com/Source-of-Intelligence/soi-sdk"
 )
 
 // random source，插件加载时初始化一次

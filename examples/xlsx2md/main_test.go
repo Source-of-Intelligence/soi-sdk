@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"soi.dev/soi-sdk"
-	"soi.dev/soi-vos"
+	"github.com/Source-of-Intelligence/soi-sdk"
+	"github.com/Source-of-Intelligence/soi-vos"
 )
 
 // =========================================================================

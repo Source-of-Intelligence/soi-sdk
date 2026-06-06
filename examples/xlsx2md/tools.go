@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	sdk "soi.dev/soi-sdk"
+	sdk "github.com/Source-of-Intelligence/soi-sdk"
 )
 
 //export registerTools

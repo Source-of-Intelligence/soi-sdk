@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"unsafe"
 
-	"soi.dev/soi-vos"
+	"github.com/Source-of-Intelligence/soi-vos"
 )
 
 // TinyGoHostAPI implements vos.HostFunctions using WASM host function imports.

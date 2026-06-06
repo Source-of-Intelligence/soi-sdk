@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"unsafe"
 
-	sdk "soi.dev/soi-sdk"
+	sdk "github.com/Source-of-Intelligence/soi-sdk"
 )
 
 func init() {

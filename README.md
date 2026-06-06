@@ -12,7 +12,7 @@
 ```go
 package main
 
-import "soi.dev/soi-sdk"
+import "github.com/Source-of-Intelligence/soi-sdk"
 
 func init() {
     sdk.RegisterToolWithDef(sdk.ToolDef{

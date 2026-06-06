@@ -6,7 +6,7 @@
 //
 //	//go:build tinygo
 //	package main
-//	import sdk "soi.dev/soi-sdk"
+//	import sdk "github.com/Source-of-Intelligence/soi-sdk"
 //	func init() { sdk.SetBuildTag("tinygo") }
 //	func main() { registerTools(); sdk.RunTinyGo() }
 //

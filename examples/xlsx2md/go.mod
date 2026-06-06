@@ -1,13 +1,13 @@
-module soi.dev/xlsx2md
+module github.com/Source-of-Intelligence/soi/xlsx2md
 
 go 1.22.0
 
 require (
-	soi.dev/soi-sdk v1.0.0
-	soi.dev/soi-vos v0.0.0
+	github.com/Source-of-Intelligence/soi-sdk v1.0.0
+	github.com/Source-of-Intelligence/soi-vos v0.0.0
 )
 
 replace (
-	soi.dev/soi-sdk => ../../
-	soi.dev/soi-vos => ../../../soi-vos
+	github.com/Source-of-Intelligence/soi-sdk => ../../
+	github.com/Source-of-Intelligence/soi-vos => ../../../soi-vos
 )

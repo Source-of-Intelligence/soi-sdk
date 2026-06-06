@@ -1,7 +1,7 @@
-module soi.dev/soi-sdk
+module github.com/Source-of-Intelligence/soi-sdk
 
 go 1.22.0
 
-require soi.dev/soi-vos v0.0.0
+require github.com/Source-of-Intelligence/soi-vos v0.0.0
 
-replace soi.dev/soi-vos => ../soi-vos
+replace github.com/Source-of-Intelligence/soi-vos => ../soi-vos

@@ -5,7 +5,7 @@ package sdk
 import (
 	"encoding/json"
 
-	"soi.dev/soi-vos"
+	"github.com/Source-of-Intelligence/soi-vos"
 )
 
 const (

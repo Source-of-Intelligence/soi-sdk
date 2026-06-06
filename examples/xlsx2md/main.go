@@ -2,7 +2,7 @@
 
 package main
 
-import sdk "soi.dev/soi-sdk"
+import sdk "github.com/Source-of-Intelligence/soi-sdk"
 
 func main() {
 	sdk.Run()
