@@ -186,8 +186,6 @@ func genGoMod(name string) string {
 go 1.22.0
 
 require github.com/Source-of-Intelligence/soi-sdk v1.0.0
-
-replace github.com/Source-of-Intelligence/soi-sdk => ../soi-sdk
 `, name)
 }
 
