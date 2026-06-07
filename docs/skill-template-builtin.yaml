@@ -42,14 +42,25 @@ spec:
     # provides
     # ====================================================================
     provides:
-        # ── 触发词（可选）：用户输入匹配到任一触发词时优先调度此插件 ──
-        # builtin 插件通常有丰富的触发词覆盖，建议中英双语
+        # ── 触发配置 ──
         triggers:
-            - "执行命令"
-            - "运行脚本"
-            - "run command"
-            - "execute script"
-            - "帮我跑一下"
+            keywords: [ "execute", "run", "cmd", "执行", "运行", "命令" ]
+            prefix: "/cmd"
+            priority: 200
 
-        instructions: | 
+        # ── 工具列表 ──
+        tools:
+          - name: execute_command      # 工具名，全局唯一，英文小写 + 下划线
+            description: 执行 shell 命令
+
+            parameters:
+              - name: command         # 参数名
+                type: string          # 类型: string | number | boolean | object | array
+                required: true        # 是否必填
+                description: 要执行的 shell 命令
+
+            # 返回值描述（建议填写）
+            returns: object with stdout and stderr
+
+        instructions: |
           描述词

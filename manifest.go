@@ -48,6 +48,7 @@ type SkillRuntime struct {
 	Entry string            `yaml:"entry,omitempty"`
 	Main  string            `yaml:"main,omitempty"`
 	Wasm  *SkillRuntimeWasm `yaml:"wasm,omitempty"`
+	Uses  []string          `yaml:"uses,omitempty"`
 }
 
 // SkillRuntimeWasm is WASM-specific runtime configuration.
@@ -78,9 +79,19 @@ type SkillDependency struct {
 
 // SkillProvides declares what the skill offers.
 type SkillProvides struct {
-	Tools        []ToolDef `yaml:"tools,omitempty"`
-	Triggers     []string  `yaml:"triggers,omitempty"`
-	Instructions string    `yaml:"instructions,omitempty"`
+	Tools        []ToolDef    `yaml:"tools,omitempty"`
+	Triggers     []string     `yaml:"triggers,omitempty"` // legacy: simple string triggers
+	Trigger      *TriggersCfg `yaml:"trigger,omitempty"`  // new: structured trigger config
+	Instructions string       `yaml:"instructions,omitempty"`
+}
+
+// TriggersCfg defines trigger configuration at provides level.
+type TriggersCfg struct {
+	Keywords []string `yaml:"keywords,omitempty"`
+	Prefix   string   `yaml:"prefix,omitempty"`
+	Regex    string   `yaml:"regex,omitempty"`
+	Events   []string `yaml:"events,omitempty"`
+	Priority int      `yaml:"priority,omitempty"`
 }
 
 // SkillConfig is the configuration passed to GenerateSkillYAML.
@@ -104,9 +115,10 @@ type SkillConfig struct {
 	// Optional runtime
 	Main string
 	Wasm *SkillRuntimeWasm
+	Uses []string // Sandbox capabilities at plugin level
 
 	// Optional provides
-	Triggers     []string
+	Triggers     *TriggersCfg // Trigger configuration at provides level
 	Instructions string
 
 	// Optional dependencies
@@ -170,6 +182,14 @@ func GenerateSkillYAML(cfg SkillConfig) string {
 	if cfg.Main != "" {
 		writeYAMLString(&b, "    main", cfg.Main, true)
 	}
+	// Use plugin-level uses from SDK registry if cfg.Uses is empty
+	usesToWrite := cfg.Uses
+	if len(usesToWrite) == 0 {
+		usesToWrite = GetPluginUses()
+	}
+	if len(usesToWrite) > 0 {
+		writeYAMLStringArray(&b, "    uses", usesToWrite)
+	}
 	if cfg.Wasm != nil {
 		writeWasmConfig(&b, cfg.Wasm)
 	}
@@ -186,6 +206,56 @@ func GenerateSkillYAML(cfg SkillConfig) string {
 	// spec.provides
 	b.WriteString("  provides:\n")
 
+	// Trigger configuration at provides level
+	var triggerToUse *TriggersCfg
+	if cfg.Triggers != nil {
+		triggerToUse = cfg.Triggers
+	} else {
+		// Check SDK's global providesTrigger
+		globalTrigger := GetProvidesTrigger()
+		if len(globalTrigger.Keywords) > 0 || globalTrigger.Prefix != "" || globalTrigger.Regex != "" || len(globalTrigger.Events) > 0 || globalTrigger.Priority != 0 {
+			triggerToUse = &TriggersCfg{
+				Keywords: globalTrigger.Keywords,
+				Prefix:   globalTrigger.Prefix,
+				Regex:    globalTrigger.Regex,
+				Events:   globalTrigger.Events,
+				Priority: globalTrigger.Priority,
+			}
+		}
+	}
+	if triggerToUse != nil {
+		b.WriteString("    triggers:\n")
+		if len(triggerToUse.Keywords) > 0 {
+			b.WriteString("      keywords: [")
+			for i, kw := range triggerToUse.Keywords {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(quoteString(kw))
+			}
+			b.WriteString("]\n")
+		}
+		if triggerToUse.Prefix != "" {
+			b.WriteString("      prefix: " + quoteString(triggerToUse.Prefix) + "\n")
+		}
+		if triggerToUse.Regex != "" {
+			b.WriteString("      regex: " + quoteString(triggerToUse.Regex) + "\n")
+		}
+		if len(triggerToUse.Events) > 0 {
+			b.WriteString("      events: [")
+			for i, ev := range triggerToUse.Events {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(quoteString(ev))
+			}
+			b.WriteString("]\n")
+		}
+		if triggerToUse.Priority != 0 {
+			fmt.Fprintf(&b, "      priority: %d\n", triggerToUse.Priority)
+		}
+	}
+
 	// tools from SDK registry
 	tools := GetToolDefs()
 	if len(tools) > 0 {
@@ -198,9 +268,6 @@ func GenerateSkillYAML(cfg SkillConfig) string {
 		}
 	}
 
-	if len(cfg.Triggers) > 0 {
-		writeYAMLStringArray(&b, "    triggers", cfg.Triggers)
-	}
 	if cfg.Instructions != "" {
 		writeYAMLString(&b, "    instructions", cfg.Instructions, true)
 	}

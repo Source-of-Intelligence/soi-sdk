@@ -59,10 +59,11 @@ spec:
   # provides
   # ====================================================================
   provides:
-    # ── 触发词（可选）：用户输入匹配到任一触发词时优先调度此插件 ──
+    # ── 触发配置 ──
     triggers:
-      - "示例触发"
-      - "example trigger"
+      keywords: [ "example", "示例" ]
+      prefix: "/example"
+      priority: 50
 
     # ── 工具列表 ──
     tools:

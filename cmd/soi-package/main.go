@@ -218,14 +218,17 @@ func runSync(dir string) error {
 
 	cmd := exec.Command("go", "run", ".", "--dir", dir)
 	cmd.Dir = syncCmdPath
-	// Capture stderr for debugging
-	var stderr bytes.Buffer
-	cmd.Stdout = io.Discard
+	// Capture both stdout and stderr for debugging
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err = cmd.Run()
 	if err != nil {
+		fmt.Println("SOI-SYNC STDOUT:\n", stdout.String())
+		fmt.Println("SOI-SYNC STDERR:\n", stderr.String())
 		return fmt.Errorf("%v: %s", err, stderr.String())
 	}
+	fmt.Println("SOI-SYNC STDOUT:\n", stdout.String())
 	return nil
 }
 

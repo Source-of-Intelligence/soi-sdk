@@ -31,7 +31,10 @@ func main() {
 
 	if *gen {
 		if err := genHarness(absDir); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			_, err = fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			if err != nil {
+				return
+			}
 			os.Exit(1)
 		}
 		fmt.Println("Generated main_test.go")

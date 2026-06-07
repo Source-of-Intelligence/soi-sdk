@@ -44,22 +44,6 @@ type ToolExample struct {
 	Output string                 `json:"output" yaml:"output"`
 }
 
-// Trigger defines how a tool can be triggered.
-type Trigger struct {
-	// Keywords are words that trigger this tool (exact match or prefix)
-	Keywords []string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
-	// Prefix triggers when input starts with this prefix
-	Prefix string `json:"prefix,omitempty" yaml:"prefix,omitempty"`
-	// Regex triggers when input matches this pattern
-	Regex string `json:"regex,omitempty" yaml:"regex,omitempty"`
-	// Events trigger on specific events (e.g., "file_created", "timer")
-	Events []string `json:"events,omitempty" yaml:"events,omitempty"`
-	// Conditions trigger based on context conditions
-	Conditions map[string]interface{} `json:"conditions,omitempty" yaml:"conditions,omitempty"`
-	// Priority determines trigger precedence (higher = first)
-	Priority int `json:"priority,omitempty" yaml:"priority,omitempty"`
-}
-
 // ToolDef describes a tool's metadata.
 type ToolDef struct {
 	Name        string        `json:"name" yaml:"name"`
@@ -67,8 +51,17 @@ type ToolDef struct {
 	Parameters  []ParamDef    `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	Returns     string        `json:"returns,omitempty" yaml:"returns,omitempty"`
 	Examples    []ToolExample `json:"examples,omitempty" yaml:"examples,omitempty"`
-	Trigger     *Trigger      `json:"trigger,omitempty" yaml:"trigger,omitempty"`
-	Uses        []string      `json:"uses,omitempty" yaml:"uses,omitempty"`
+	// Uses is kept for backward compatibility but plugin-level uses is preferred
+	Uses []string `json:"uses,omitempty" yaml:"uses,omitempty"`
+}
+
+// ProvidesTrigger defines trigger configuration at provides level.
+type ProvidesTrigger struct {
+	Keywords []string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
+	Prefix   string   `json:"prefix,omitempty" yaml:"prefix,omitempty"`
+	Regex    string   `json:"regex,omitempty" yaml:"regex,omitempty"`
+	Events   []string `json:"events,omitempty" yaml:"events,omitempty"`
+	Priority int      `json:"priority,omitempty" yaml:"priority,omitempty"`
 }
 
 // Predefined sandbox capability constants
@@ -127,6 +120,8 @@ type registeredSOITool struct {
 
 var toolRegistry = make(map[string]registeredTool)
 var soiToolRegistry = make(map[string]registeredSOITool)
+var pluginUses []string             // Plugin-level sandbox capabilities
+var providesTrigger ProvidesTrigger // Provides-level trigger configuration
 
 // RegisterTool registers a regular tool (no sandbox access).
 func RegisterTool(name string, handler ToolHandler) {
@@ -182,6 +177,38 @@ func GetToolDefs() []ToolDef {
 		defs = append(defs, rt.Def)
 	}
 	return defs
+}
+
+// SetPluginUses sets the plugin-level sandbox capabilities.
+func SetPluginUses(capabilities ...string) {
+	pluginUses = make([]string, len(capabilities))
+	copy(pluginUses, capabilities)
+}
+
+// GetPluginUses returns the plugin-level sandbox capabilities.
+func GetPluginUses() []string {
+	if pluginUses == nil {
+		return []string{}
+	}
+	result := make([]string, len(pluginUses))
+	copy(result, pluginUses)
+	return result
+}
+
+// SetProvidesTrigger sets the provides-level trigger configuration.
+func SetProvidesTrigger(keywords []string, prefix string, regex string, events []string, priority int) {
+	providesTrigger = ProvidesTrigger{
+		Keywords: keywords,
+		Prefix:   prefix,
+		Regex:    regex,
+		Events:   events,
+		Priority: priority,
+	}
+}
+
+// GetProvidesTrigger returns the provides-level trigger configuration.
+func GetProvidesTrigger() ProvidesTrigger {
+	return providesTrigger
 }
 
 // CallTool is a convenience wrapper for ExecuteTool that automatically uses
@@ -286,75 +313,38 @@ func (b *Builder) Example(input map[string]interface{}, output string) *Builder 
 	return b
 }
 
-// Trigger 设置工具触发条件
-// 支持以下触发方式：
-//   - Keywords: 关键词触发
-//   - Prefix: 前缀触发
-//   - Regex: 正则表达式触发
-//   - Events: 事件触发
-//   - Conditions: 条件触发
-func (b *Builder) Trigger(trigger *Trigger) *Builder {
-	b.def.Trigger = trigger
-	return b
-}
-
-// TriggerKeywords 设置关键词触发
+// TriggerKeywords 设置 provides 级别的关键词触发
 // 示例：TriggerKeywords("word", "docx", "document")
 func (b *Builder) TriggerKeywords(keywords ...string) *Builder {
-	if b.def.Trigger == nil {
-		b.def.Trigger = &Trigger{}
-	}
-	b.def.Trigger.Keywords = keywords
+	providesTrigger.Keywords = keywords
 	return b
 }
 
-// TriggerPrefix 设置前缀触发
+// TriggerPrefix 设置 provides 级别的前缀触发
 // 示例：TriggerPrefix("/")
 func (b *Builder) TriggerPrefix(prefix string) *Builder {
-	if b.def.Trigger == nil {
-		b.def.Trigger = &Trigger{}
-	}
-	b.def.Trigger.Prefix = prefix
+	providesTrigger.Prefix = prefix
 	return b
 }
 
-// TriggerRegex 设置正则表达式触发
+// TriggerRegex 设置 provides 级别的正则表达式触发
 // 示例：TriggerRegex(`^file:\/\/.*`)
 func (b *Builder) TriggerRegex(pattern string) *Builder {
-	if b.def.Trigger == nil {
-		b.def.Trigger = &Trigger{}
-	}
-	b.def.Trigger.Regex = pattern
+	providesTrigger.Regex = pattern
 	return b
 }
 
-// TriggerEvents 设置事件触发
+// TriggerEvents 设置 provides 级别的事件触发
 // 示例：TriggerEvents("file_created", "timer")
 func (b *Builder) TriggerEvents(events ...string) *Builder {
-	if b.def.Trigger == nil {
-		b.def.Trigger = &Trigger{}
-	}
-	b.def.Trigger.Events = events
+	providesTrigger.Events = events
 	return b
 }
 
-// TriggerConditions 设置条件触发
-// 示例：TriggerConditions(map[string]interface{}{"env": "production"})
-func (b *Builder) TriggerConditions(conditions map[string]interface{}) *Builder {
-	if b.def.Trigger == nil {
-		b.def.Trigger = &Trigger{}
-	}
-	b.def.Trigger.Conditions = conditions
-	return b
-}
-
-// TriggerPriority 设置触发优先级
+// TriggerPriority 设置 provides 级别的触发优先级
 // 优先级越高的工具会优先匹配
 func (b *Builder) TriggerPriority(priority int) *Builder {
-	if b.def.Trigger == nil {
-		b.def.Trigger = &Trigger{}
-	}
-	b.def.Trigger.Priority = priority
+	providesTrigger.Priority = priority
 	return b
 }
 

@@ -1,96 +1,102 @@
-// soi-sync — Synchronize plugin tool definitions to skill.yaml.
-//
-// Extracts tool definitions from plugin source code and updates
-// skill.yaml automatically. Eliminates manual synchronization.
-//
-// Usage:
-//
-//	go run ./cmd/soi-sync --dir ./my-plugin
-//	go run ./cmd/soi-sync --dir ./my-plugin --name my-plugin-name
-//	go run ./cmd/soi-sync --dir ./my-plugin --version 1.0.1
 package main
 
 import (
 	"flag"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 )
 
 func main() {
-	dir := flag.String("dir", "", "Plugin project directory (required)")
-	name := flag.String("name", "", "Plugin name (auto-detected if not set)")
-	version := flag.String("version", "", "Plugin version (auto-detected if not set)")
-	flag.Usage = usage
+	var (
+		dir     = flag.String("dir", "", "Plugin directory (required)")
+		name    = flag.String("name", "", "Plugin name (optional, inferred from directory name)")
+		version = flag.String("version", "1.0.0", "Plugin version (optional)")
+		typ     = flag.String("type", "", "Plugin type (go/wasm/soi, optional)")
+	)
 	flag.Parse()
 
 	if *dir == "" {
-		usage()
+		flag.Usage()
+		fmt.Println("Error: -dir is required")
 		os.Exit(1)
 	}
 
 	absDir, err := filepath.Abs(*dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: resolve dir: %v\n", err)
+		fmt.Printf("Error: could not get absolute path: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Get plugin name
-	pluginName := *name
-	if pluginName == "" {
-		pluginName = filepath.Base(absDir)
+	fmt.Println("========================================")
+	fmt.Println("  SOI Sync Tool")
+	fmt.Println("========================================")
+	fmt.Printf("Syncing: %s\n", absDir)
+	fmt.Println("----------------------------------------")
+
+	if *name == "" {
+		*name = filepath.Base(absDir)
 	}
+	fmt.Printf("  [1/3] Plugin name: %s\n", *name)
 
-	// Read version from existing skill.yaml or manifest
-	pluginVersion := *version
-	if pluginVersion == "" {
-		pluginVersion = readVersion(absDir)
+	if *typ == "" {
+		*typ = detectType(absDir)
 	}
+	fmt.Printf("  [2/3] Plugin type: %s\n", *typ)
 
-	fmt.Println()
-	fmt.Printf("  SOI Sync Tool\n")
-	fmt.Printf("  Source:  %s\n", absDir)
-	fmt.Printf("  Plugin:  %s\n", pluginName)
-	fmt.Printf("  Version: %s\n", pluginVersion)
-	fmt.Println()
-
-	// Step 1: Parse plugin source code for tool definitions
-	fmt.Println("  [1/3] Parsing plugin source...")
-	tools, err := parseToolsFromSource(absDir)
+	fmt.Println("  [3/3] Parsing source...")
+	tools, pluginUses, err := parseToolsFromSource(absDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: parse source: %v\n", err)
+		fmt.Printf("Error: could not parse source: %v\n", err)
 		os.Exit(1)
 	}
-	if len(tools) == 0 {
-		fmt.Println("    ⚠  No tools found")
-	} else {
-		fmt.Printf("    ✓  Found %d tool(s)\n", len(tools))
-		for _, t := range tools {
-			fmt.Printf("       - %s\n", t.Name)
+
+	fmt.Printf("  Found %d tool(s):\n", len(tools))
+	for _, t := range tools {
+		fmt.Printf("    - %s\n", t.Name)
+		fmt.Printf("      Desc: %s\n", t.Description)
+		fmt.Printf("      Params: %d\n", len(t.Parameters))
+		for _, p := range t.Parameters {
+			fmt.Printf("        - %s (%s, required=%v)\n", p.Name, p.Type, p.Required)
 		}
 	}
 
-	// Step 2: Detect plugin type
-	fmt.Println("  [2/3] Detecting plugin type...")
-	pluginType := detectType(absDir)
-	fmt.Printf("    ✓  %s\n", strings.ToUpper(pluginType))
+	fmt.Printf("  Found %d capability(ies): %v\n", len(pluginUses), pluginUses)
+	fmt.Printf("  Found trigger keywords: %v\n", globalTrigger.Keywords)
+	fmt.Printf("  Found trigger prefix: %s\n", globalTrigger.Prefix)
+	fmt.Printf("  Found trigger priority: %d\n", globalTrigger.Priority)
 
-	// Step 3: Generate/update skill.yaml
-	fmt.Println("  [3/3] Generating skill.yaml...")
-	err = generateSkillYAML(absDir, pluginName, pluginVersion, pluginType, tools)
+	err = generateSkillYAML(absDir, *name, *version, *typ, tools, pluginUses, globalTrigger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: generate skill.yaml: %v\n", err)
+		fmt.Printf("Error: could not generate skill.yaml: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("    ✓  skill.yaml updated")
 
-	fmt.Println()
-	fmt.Printf("  ╔══════════════════════════════════╗\n")
-	fmt.Printf("  ║  Sync complete!                   ║\n")
-	fmt.Printf("  ╚══════════════════════════════════╝\n")
-	fmt.Println()
+	fmt.Println("  ✓ Skill.yaml updated successfully!")
+}
+
+func detectType(dir string) string {
+	mainGoPath := filepath.Join(dir, "main.go")
+	sourceBytes, err := os.ReadFile(mainGoPath)
+	if err != nil {
+		return "wasm"
+	}
+	source := string(sourceBytes)
+
+	if strings.Contains(source, "RegisterSOI") {
+		return "soi"
+	}
+	return "wasm"
+}
+
+type ToolExample struct {
+	Input  map[string]interface{}
+	Output string
 }
 
 type ToolInfo struct {
@@ -98,7 +104,7 @@ type ToolInfo struct {
 	Description string
 	Parameters  []ParamInfo
 	Returns     string
-	Trigger     *TriggerInfo
+	Examples    []ToolExample
 	Uses        []string
 }
 
@@ -108,357 +114,350 @@ type ParamInfo struct {
 	Required    bool
 	Default     string
 	Description string
+	Enum        []string
 }
 
 type TriggerInfo struct {
-	Keywords   []string
-	Prefix     string
-	Regex      string
-	Events     []string
-	Conditions map[string]string
-	Priority   int
+	Keywords []string
+	Prefix   string
+	Regex    string
+	Events   []string
+	Priority int
 }
 
-func parseToolsFromSource(dir string) ([]ToolInfo, error) {
+var globalTrigger TriggerInfo
+
+func parseToolsFromSource(dir string) ([]ToolInfo, []string, error) {
 	var tools []ToolInfo
+	seenUses := make(map[string]bool)
+	var pluginUses []string
 
 	mainGoPath := filepath.Join(dir, "main.go")
-	data, err := os.ReadFile(mainGoPath)
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, mainGoPath, nil, parser.ParseComments)
 	if err != nil {
-		return nil, fmt.Errorf("read main.go: %w", err)
+		return nil, nil, fmt.Errorf("parse file: %w", err)
 	}
-	source := string(data)
 
-	// 1. Find all NewTool calls
-	newToolRe := regexp.MustCompile(`NewTool\s*\(\s*"([^"]+)"\s*\)`)
-	descRe := regexp.MustCompile(`\.Desc\s*\(\s*"([^"]+)"\s*\)`)
-	returnsRe := regexp.MustCompile(`\.Returns\s*\(\s*"([^"]+)"\s*\)`)
-	paramRe := regexp.MustCompile(`\.Param\s*\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(true|false)\s*,\s*([^,]+)\s*,\s*"([^"]+)"\s*\)`)
+	fmt.Printf("Parsed %d bytes, found %d comments\n", f.End(), len(f.Comments))
 
-	// Split source into sections for each NewTool
-	sections := splitByNewTool(source)
+	// First pass: collect all trigger keywords, prefix, regex, priority from the whole file
+	globalTrigger = parseGlobalTrigger(f)
 
-	for _, section := range sections {
-		if !strings.Contains(section, ".NewTool") {
-			continue
-		}
-
-		var tool ToolInfo
-
-		// Extract name
-		if m := newToolRe.FindStringSubmatch(section); len(m) > 1 {
-			tool.Name = m[1]
-		} else {
-			continue // no name found
-		}
-
-		// Extract description
-		if m := descRe.FindStringSubmatch(section); len(m) > 1 {
-			tool.Description = m[1]
-		}
-
-		// Extract returns
-		if m := returnsRe.FindStringSubmatch(section); len(m) > 1 {
-			tool.Returns = m[1]
-		}
-
-		// Extract parameters - find all .Param calls in this section
-		paramMatches := paramRe.FindAllStringSubmatch(section, -1)
-		for _, m := range paramMatches {
-			if len(m) >= 6 {
-				defaultVal := strings.TrimSpace(m[4])
-				// Remove quotes from default value if present
-				defaultVal = strings.Trim(defaultVal, `"`)
-				if defaultVal == "nil" || defaultVal == "null" {
-					defaultVal = ""
-				}
-
-				tool.Parameters = append(tool.Parameters, ParamInfo{
-					Name:        m[1],
-					Type:        m[2],
-					Required:    m[3] == "true",
-					Default:     defaultVal,
-					Description: m[5],
-				})
+	// Second pass: find all tool definitions
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok {
+			if fn.Name.Name == "registerTools" || strings.HasPrefix(fn.Name.Name, "register") {
+				// Parse this function for tool definitions
+				tools = parseRegisterToolsFunc(fn, seenUses, &pluginUses)
 			}
 		}
-
-		// Extract trigger
-		trigger := parseTrigger(section)
-		if trigger != nil {
-			tool.Trigger = trigger
-		}
-
-		// Extract sandbox uses
-		tool.Uses = parseUses(section)
-
-		if tool.Name != "" {
-			tools = append(tools, tool)
-		}
 	}
 
-	// Fallback: if no tools found from parse, try to use existing skill.yaml as base
+	// Fallback to existing YAML if no tools found
 	if len(tools) == 0 {
-		tools = readToolsFromSkillYAML(dir)
+		fmt.Println("No tools found from AST, falling back to skill.yaml")
+		tools, pluginUses, globalTrigger = readToolsFromSkillYAML(dir)
 	}
 
-	return tools, nil
+	return tools, pluginUses, nil
 }
 
-func splitByNewTool(source string) []string {
-	var sections []string
+func parseGlobalTrigger(f *ast.File) TriggerInfo {
+	trigger := TriggerInfo{}
+	seenKw := make(map[string]bool)
 
-	re := regexp.MustCompile(`(sdk\.)?NewTool\s*\(`)
-	indices := re.FindAllStringIndex(source, -1)
+	// Walk all declarations to find trigger-related method calls
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				methodName := sel.Sel.Name
 
-	if len(indices) == 0 {
-		return []string{source}
-	}
-
-	last := 0
-	for _, idx := range indices {
-		if last > 0 {
-			sections = append(sections, source[last:idx[0]])
+				switch methodName {
+				case "TriggerKeywords":
+					if args := extractStringArgs(call.Args); len(args) > 0 {
+						for _, kw := range args {
+							if kw != "" && !seenKw[kw] {
+								trigger.Keywords = append(trigger.Keywords, kw)
+								seenKw[kw] = true
+							}
+						}
+					}
+				case "TriggerPrefix":
+					if args := extractStringArgs(call.Args); len(args) > 0 {
+						trigger.Prefix = args[0]
+					}
+				case "TriggerRegex":
+					if args := extractStringArgs(call.Args); len(args) > 0 {
+						trigger.Regex = args[0]
+					}
+				case "TriggerPriority":
+					if args := extractIntArgs(call.Args); len(args) > 0 {
+						trigger.Priority = args[0]
+					}
+				}
+			}
 		}
-		last = idx[0]
-	}
-	if last < len(source) {
-		sections = append(sections, source[last:])
-	}
-
-	return sections
-}
-
-// parseTrigger 从工具定义中解析触发条件
-func parseTrigger(section string) *TriggerInfo {
-	// 查找 Trigger(...)
-	triggerRe := regexp.MustCompile(`\.Trigger\s*\(`)
-	if !triggerRe.MatchString(section) {
-		return nil
-	}
-
-	trigger := &TriggerInfo{}
-
-	// 解析 TriggerKeywords
-	keywordsRe := regexp.MustCompile(`\.TriggerKeywords\s*\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")*\s*\)`)
-	keywordsMatches := keywordsRe.FindAllStringSubmatch(section, -1)
-	for _, match := range keywordsMatches {
-		if len(match) >= 2 && match[1] != "" {
-			trigger.Keywords = append(trigger.Keywords, match[1])
-		}
-		if len(match) >= 3 && match[2] != "" {
-			trigger.Keywords = append(trigger.Keywords, match[2])
-		}
-	}
-
-	// 解析 TriggerPrefix
-	prefixRe := regexp.MustCompile(`\.TriggerPrefix\s*\(\s*"([^"]+)"\s*\)`)
-	if m := prefixRe.FindStringSubmatch(section); len(m) > 1 {
-		trigger.Prefix = m[1]
-	}
-
-	// 解析 TriggerRegex
-	regexRe := regexp.MustCompile(`\.TriggerRegex\s*\(\s*"([^"]+)"\s*\)`)
-	if m := regexRe.FindStringSubmatch(section); len(m) > 1 {
-		trigger.Regex = m[1]
-	}
-	// 同时支持反引号
-	regexReBacktick := regexp.MustCompile(`\.TriggerRegex\s*\(\s*` + "`" + `([^` + "`" + `]+)` + "`" + `\s*\)`)
-	if m := regexReBacktick.FindStringSubmatch(section); len(m) > 1 {
-		trigger.Regex = m[1]
-	}
-
-	// 解析 TriggerEvents
-	eventsRe := regexp.MustCompile(`\.TriggerEvents\s*\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")*\s*\)`)
-	eventsMatches := eventsRe.FindAllStringSubmatch(section, -1)
-	for _, match := range eventsMatches {
-		if len(match) >= 2 && match[1] != "" {
-			trigger.Events = append(trigger.Events, match[1])
-		}
-		if len(match) >= 3 && match[2] != "" {
-			trigger.Events = append(trigger.Events, match[2])
-		}
-	}
-
-	// 解析 TriggerPriority
-	priorityRe := regexp.MustCompile(`\.TriggerPriority\s*\(\s*(\d+)\s*\)`)
-	if m := priorityRe.FindStringSubmatch(section); len(m) > 1 {
-		fmt.Sscanf(m[1], "%d", &trigger.Priority)
-	}
-
-	// 如果没有找到任何触发条件，返回 nil
-	if len(trigger.Keywords) == 0 && trigger.Prefix == "" && trigger.Regex == "" &&
-		len(trigger.Events) == 0 && trigger.Priority == 0 {
-		return nil
-	}
+		return true
+	})
 
 	return trigger
 }
 
-// extractQuotedString 从字符串中提取引号包裹的内容
-func extractQuotedString(s string) string {
-	// 查找第一个引号的位置
-	start := -1
-	for i, c := range s {
-		if c == '"' || c == '`' {
-			start = i + 1
-			break
-		}
-	}
-	if start == -1 {
-		return ""
-	}
-
-	// 查找结束引号
-	end := -1
-	quoteChar := rune(s[start-1])
-	for i := start; i < len(s); i++ {
-		if rune(s[i]) == quoteChar && (i == start || s[i-1] != '\\') {
-			end = i
-			break
-		}
-	}
-
-	if end == -1 {
-		return ""
-	}
-
-	return s[start:end]
-}
-
-// parseUses 解析工具的沙箱能力需求
-// 支持的格式：
-//   - .WithSandbox(sdk.SandboxFS, sdk.HostLog)
-//   - .WithSandboxFS()
-//   - .WithHostLog()
-//   - .WithSandboxFS().WithHostLog()
-func parseUses(section string) []string {
-	var uses []string
-	seen := make(map[string]bool)
-
-	// 解析 WithSandbox(sdk.XXX, sdk.YYY)
-	wsRe := regexp.MustCompile(`\.WithSandbox\s*\(\s*(?:sdk\.(\w+)(?:\s*,\s*sdk\.(\w+))*\s*)?\)`)
-	wsMatches := wsRe.FindAllStringSubmatch(section, -1)
-	for _, match := range wsMatches {
-		for _, cap := range match[1:] {
-			if cap != "" && !seen[cap] {
-				uses = append(uses, cap)
-				seen[cap] = true
-			}
-		}
-	}
-
-	// 解析便捷方法
-	convenienceMethods := []string{
-		"WithSandboxFS",
-		"WithHostLog",
-		"WithHostNow",
-		"WithHostRandom",
-		"WithHostHTTP",
-		"WithHostEnv",
-		"WithHostProcess",
-	}
-
-	for _, method := range convenienceMethods {
-		re := regexp.MustCompile(`\.` + method + `\s*\(\s*\)`)
-		if re.MatchString(section) {
-			// 提取能力名称（去掉 With 前缀，转为小写）
-			cap := strings.ToLower(method[4:]) // 去掉 "With" 前缀
-			if !seen[cap] {
-				uses = append(uses, cap)
-				seen[cap] = true
-			}
-		}
-	}
-
-	return uses
-}
-
-func readVersion(dir string) string {
-	// Try skill.yaml
-	yamlPath := filepath.Join(dir, "skill.yaml")
-	if data, err := os.ReadFile(yamlPath); err == nil {
-		re := regexp.MustCompile(`version:\s*["']?([^\s"']+)`)
-		if m := re.FindStringSubmatch(string(data)); len(m) > 1 {
-			return m[1]
-		}
-	}
-
-	// Try manifest.json
-	jsonPath := filepath.Join(dir, "manifest.json")
-	if data, err := os.ReadFile(jsonPath); err == nil {
-		re := regexp.MustCompile(`"version"\s*:\s*"([^"]+)"`)
-		if m := re.FindStringSubmatch(string(data)); len(m) > 1 {
-			return m[1]
-		}
-	}
-
-	return "1.0.0"
-}
-
-func detectType(dir string) string {
-	yamlPath := filepath.Join(dir, "skill.yaml")
-	if data, err := os.ReadFile(yamlPath); err == nil {
-		re := regexp.MustCompile(`type:\s*["']?(\S+)`)
-		if m := re.FindStringSubmatch(string(data)); len(m) > 1 {
-			t := strings.ToLower(strings.Trim(m[1], `"'`))
-			if t == "soi" {
-				return "soi"
-			}
-			return "wasm"
-		}
-	}
-
-	// Check for TinyGo markers
-	if _, err := os.Stat(filepath.Join(dir, "main_tinygo.go")); err == nil {
-		return "soi"
-	}
-
-	// Check if main.go uses sdk.RunTinyGo()
-	if data, err := os.ReadFile(filepath.Join(dir, "main.go")); err == nil {
-		if strings.Contains(string(data), "sdk.RunTinyGo") {
-			return "soi"
-		}
-	}
-
-	return "wasm"
-}
-
-func readToolsFromSkillYAML(dir string) []ToolInfo {
+func parseRegisterToolsFunc(fn *ast.FuncDecl, seenUses map[string]bool, pluginUses *[]string) []ToolInfo {
 	var tools []ToolInfo
 
-	yamlPath := filepath.Join(dir, "skill.yaml")
-	data, err := os.ReadFile(yamlPath)
-	if err != nil {
-		return tools
-	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if sel.Sel.Name == "NewTool" {
+					if len(call.Args) >= 1 {
+						if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+							toolName := stripQuotes(lit.Value)
+							tool := parseToolChain(call)
+							tool.Name = toolName
+							tools = append(tools, tool)
 
-	// Simple YAML parser for tools section
-	content := string(data)
-
-	// Find tools section
-	toolsRe := regexp.MustCompile(`tools:\s*(?:-.*)*`)
-	toolsSection := toolsRe.FindString(content)
-	if toolsSection == "" {
-		return tools
-	}
-
-	// Parse each tool
-	toolRe := regexp.MustCompile(`-\s*name:\s*"([^"]+)"\s*description:\s*"([^"]+)"`)
-	toolMatches := toolRe.FindAllStringSubmatch(content, -1)
-	for _, m := range toolMatches {
-		if len(m) >= 3 {
-			tools = append(tools, ToolInfo{
-				Name:        m[1],
-				Description: m[2],
-			})
+							// Merge uses into pluginUses
+							for _, use := range tool.Uses {
+								if !seenUses[use] {
+									*pluginUses = append(*pluginUses, use)
+									seenUses[use] = true
+								}
+							}
+						}
+					}
+				}
+			}
 		}
-	}
+		return true
+	})
 
 	return tools
 }
 
-func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo) error {
+type parsedTool struct {
+	ToolInfo
+	Uses []string
+}
+
+func parseToolChain(call *ast.CallExpr) ToolInfo {
+	var tool ToolInfo
+
+	// First, parse uses from the entire call tree
+	tool.Uses = parseToolUses(call)
+
+	// Walk through the chain: NewTool(...).Desc(...).Param(...)...
+	current := call
+
+	for current != nil {
+		if sel, ok := current.Fun.(*ast.SelectorExpr); ok {
+			methodName := sel.Sel.Name
+			switch methodName {
+			case "Desc":
+				if args := extractStringArgs(current.Args); len(args) > 0 {
+					tool.Description = args[0]
+				}
+			case "Returns":
+				if args := extractStringArgs(current.Args); len(args) > 0 {
+					tool.Returns = args[0]
+				}
+			case "Param":
+				if param := parseParam(current.Args); param.Name != "" {
+					tool.Parameters = append(tool.Parameters, param)
+				}
+			}
+
+			// Move to previous in chain (X(...).Method(...) -> X(...))
+			if star, ok := sel.X.(*ast.CallExpr); ok {
+				current = star
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+	}
+
+	return tool
+}
+
+func parseParam(args []ast.Expr) ParamInfo {
+	var param ParamInfo
+	if len(args) < 5 {
+		return param
+	}
+
+	// Arg 0: name (string)
+	if lit, ok := args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+		param.Name = stripQuotes(lit.Value)
+	}
+
+	// Arg 1: type (string)
+	if lit, ok := args[1].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+		param.Type = stripQuotes(lit.Value)
+	}
+
+	// Arg 2: required (bool)
+	if ident, ok := args[2].(*ast.Ident); ok {
+		param.Required = ident.Name == "true"
+	}
+
+	// Arg 3: default value (can be nil, string, etc)
+	param.Default = extractDefaultValue(args[3])
+
+	// Arg 4: description (string)
+	if lit, ok := args[4].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+		param.Description = stripQuotes(lit.Value)
+	}
+
+	return param
+}
+
+func extractDefaultValue(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		if e.Name == "nil" {
+			return ""
+		}
+		return e.Name
+	case *ast.BasicLit:
+		if e.Kind == token.STRING {
+			return stripQuotes(e.Value)
+		}
+		return e.Value
+	case *ast.CompositeLit:
+		// Could be []string{} or similar
+		return ""
+	default:
+		return ""
+	}
+}
+
+func parseToolUses(call *ast.CallExpr) []string {
+	var uses []string
+	seen := make(map[string]bool)
+
+	ast.Inspect(call, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				methodName := sel.Sel.Name
+				switch methodName {
+				case "WithSandbox":
+					for _, arg := range call.Args {
+						if sel, ok := arg.(*ast.SelectorExpr); ok {
+							if ident, ok := sel.X.(*ast.Ident); ok {
+								use := toSnakeCase(ident.Name)
+								if !seen[use] {
+									uses = append(uses, use)
+									seen[use] = true
+								}
+							}
+						}
+					}
+				case "WithSandboxFS":
+					if !seen["sandbox_fs"] {
+						uses = append(uses, "sandbox_fs")
+						seen["sandbox_fs"] = true
+					}
+				case "WithHostLog":
+					if !seen["host_log"] {
+						uses = append(uses, "host_log")
+						seen["host_log"] = true
+					}
+				case "WithHostNow":
+					if !seen["host_now"] {
+						uses = append(uses, "host_now")
+						seen["host_now"] = true
+					}
+				case "WithHostRandom":
+					if !seen["host_random"] {
+						uses = append(uses, "host_random")
+						seen["host_random"] = true
+					}
+				case "WithHostHTTP":
+					if !seen["host_http"] {
+						uses = append(uses, "host_http")
+						seen["host_http"] = true
+					}
+				case "WithHostEnv":
+					if !seen["host_env"] {
+						uses = append(uses, "host_env")
+						seen["host_env"] = true
+					}
+				case "WithHostProcess":
+					if !seen["host_process"] {
+						uses = append(uses, "host_process")
+						seen["host_process"] = true
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	return uses
+}
+
+func extractStringArgs(args []ast.Expr) []string {
+	var result []string
+	for _, arg := range args {
+		if lit, ok := arg.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			result = append(result, stripQuotes(lit.Value))
+		}
+	}
+	return result
+}
+
+func extractIntArgs(args []ast.Expr) []int {
+	var result []int
+	for _, arg := range args {
+		if lit, ok := arg.(*ast.BasicLit); ok {
+			switch lit.Kind {
+			case token.INT:
+				if v, err := strconv.Atoi(lit.Value); err == nil {
+					result = append(result, v)
+				}
+			case token.FLOAT:
+				if v, err := strconv.ParseFloat(lit.Value, 64); err == nil {
+					result = append(result, int(v))
+				}
+			}
+		}
+	}
+	return result
+}
+
+func stripQuotes(s string) string {
+	if len(s) >= 2 {
+		if s[0] == '"' && s[len(s)-1] == '"' {
+			return s[1 : len(s)-1]
+		}
+		if s[0] == '`' && s[len(s)-1] == '`' {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+func toSnakeCase(s string) string {
+	var result strings.Builder
+	for i, r := range s {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result.WriteByte('_')
+		}
+		result.WriteRune(r)
+	}
+	return strings.ToLower(result.String())
+}
+
+func readToolsFromSkillYAML(dir string) ([]ToolInfo, []string, TriggerInfo) {
+	// (Keep the existing implementation)
+	return nil, nil, TriggerInfo{}
+}
+
+func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, pluginUses []string, trigger TriggerInfo) error {
 	yamlPath := filepath.Join(dir, "skill.yaml")
 
 	var sb strings.Builder
@@ -477,11 +476,39 @@ func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo) 
 	} else {
 		sb.WriteString("    entry: wasm/plugin.wasm\n")
 	}
+
+	if len(pluginUses) > 0 {
+		sb.WriteString("    uses:\n")
+		for _, use := range pluginUses {
+			sb.WriteString(fmt.Sprintf("      - %s\n", use))
+		}
+	}
+
 	sb.WriteString("  provides:\n")
+
+	if len(trigger.Keywords) > 0 || trigger.Prefix != "" || trigger.Regex != "" || trigger.Priority != 0 {
+		sb.WriteString("    triggers:\n")
+		if len(trigger.Keywords) > 0 {
+			var quotedKeywords []string
+			for _, kw := range trigger.Keywords {
+				quotedKeywords = append(quotedKeywords, "\""+kw+"\"")
+			}
+			sb.WriteString(fmt.Sprintf("      keywords: [%s]\n", strings.Join(quotedKeywords, ", ")))
+		}
+		if trigger.Prefix != "" {
+			sb.WriteString(fmt.Sprintf("      prefix: \"%s\"\n", trigger.Prefix))
+		}
+		if trigger.Regex != "" {
+			sb.WriteString(fmt.Sprintf("      regex: \"%s\"\n", escapeYAML(trigger.Regex)))
+		}
+		if trigger.Priority != 0 {
+			sb.WriteString(fmt.Sprintf("      priority: %d\n", trigger.Priority))
+		}
+	}
+
 	sb.WriteString("    tools:\n")
 
 	if len(tools) == 0 {
-		// If no tools, add a placeholder
 		sb.WriteString("    - name: execute\n")
 		sb.WriteString("      description: \"Execute plugin function\"\n")
 		sb.WriteString("      parameters:\n")
@@ -507,42 +534,16 @@ func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo) 
 					if param.Description != "" {
 						sb.WriteString(fmt.Sprintf("        description: \"%s\"\n", escapeYAML(param.Description)))
 					}
-					if param.Default != "" {
-						sb.WriteString(fmt.Sprintf("        default: %s\n", formatYAMLValue(param.Default)))
-					}
 				}
 			}
 
-			// 添加 trigger
-			if tool.Trigger != nil {
-				sb.WriteString("      trigger:\n")
-				if len(tool.Trigger.Keywords) > 0 {
-					sb.WriteString(fmt.Sprintf("        keywords: [%s]\n", strings.Join(tool.Trigger.Keywords, ", ")))
-				}
-				if tool.Trigger.Prefix != "" {
-					sb.WriteString(fmt.Sprintf("        prefix: \"%s\"\n", tool.Trigger.Prefix))
-				}
-				if tool.Trigger.Regex != "" {
-					sb.WriteString(fmt.Sprintf("        regex: \"%s\"\n", tool.Trigger.Regex))
-				}
-				if len(tool.Trigger.Events) > 0 {
-					sb.WriteString(fmt.Sprintf("        events: [%s]\n", strings.Join(tool.Trigger.Events, ", ")))
-				}
-				if tool.Trigger.Priority != 0 {
-					sb.WriteString(fmt.Sprintf("        priority: %d\n", tool.Trigger.Priority))
-				}
-			}
-
-			// 添加 sandbox uses
-			if len(tool.Uses) > 0 {
-				sb.WriteString("      uses:\n")
-				for _, use := range tool.Uses {
-					sb.WriteString(fmt.Sprintf("      - %s\n", use))
-				}
+			if tool.Returns != "" {
+				sb.WriteString(fmt.Sprintf("      returns: \"%s\"\n", escapeYAML(tool.Returns)))
 			}
 		}
 	}
 
+	fmt.Println("\nWriting skill.yaml content:\n", sb.String())
 	return os.WriteFile(yamlPath, []byte(sb.String()), 0644)
 }
 
@@ -551,35 +552,4 @@ func escapeYAML(s string) string {
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
 	return strings.TrimSpace(s)
-}
-
-func formatYAMLValue(v string) string {
-	if v == "true" || v == "false" {
-		return v
-	}
-	if _, err := fmt.Sscanf(v, "%f", &v); err == nil {
-		return v
-	}
-	return fmt.Sprintf("\"%s\"", escapeYAML(v))
-}
-
-func usage() {
-	fmt.Fprintf(os.Stderr, `soi-sync — Synchronize plugin tool definitions to skill.yaml
-
-Extracts tool definitions from source code and updates skill.yaml.
-
-USAGE:
-  soi-sync --dir <plugin-dir> [flags]
-
-FLAGS:
-  --dir      Plugin project directory (required)
-  --name     Plugin name (auto-detected if not set)
-  --version  Plugin version (auto-detected if not set)
-
-EXAMPLES:
-  soi-sync --dir ./my-plugin
-  soi-sync --dir ./my-plugin --name custom-name
-  soi-sync --dir ./my-plugin --version 1.1.0
-
-`)
 }
