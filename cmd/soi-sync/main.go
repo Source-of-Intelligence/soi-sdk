@@ -144,27 +144,81 @@ func parseToolsFromSource(dir string) ([]ToolInfo, []string, WasmConfig, error) 
 	seenUses := make(map[string]bool)
 	var pluginUses []string
 
-	mainGoPath := filepath.Join(dir, "main.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, mainGoPath, nil, parser.ParseComments)
-	if err != nil {
-		return nil, nil, WasmConfig{}, fmt.Errorf("parse file: %w", err)
+	// 解析多个源文件：main.go 和 bridge.go
+	sourceFiles := []string{
+		filepath.Join(dir, "main.go"),
+		filepath.Join(dir, "bridge.go"),
 	}
 
-	fmt.Printf("Parsed %d bytes, found %d comments\n", f.End(), len(f.Comments))
+	var files []*ast.File
+	fset := token.NewFileSet()
 
-	// First pass: collect all trigger keywords, prefix, regex, priority, description and wasm config from the whole file
-	globalTrigger = parseGlobalTrigger(f)
-	globalDescription = parseGlobalDescription(f)
-	globalWasmConfig = parseGlobalWasmConfig(f)
+	for _, filePath := range sourceFiles {
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			continue
+		}
 
-	// Second pass: find all tool definitions
-	for _, decl := range f.Decls {
-		if fn, ok := decl.(*ast.FuncDecl); ok {
-			if fn.Name.Name == "registerTools" || strings.HasPrefix(fn.Name.Name, "register") {
-				// Parse this function for tool definitions
-				tools = parseRegisterToolsFunc(fn, seenUses, &pluginUses)
+		f, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
+		if err != nil {
+			fmt.Printf("Warning: could not parse %s: %v\n", filePath, err)
+			continue
+		}
+		files = append(files, f)
+	}
+
+	if len(files) == 0 {
+		return nil, nil, WasmConfig{}, fmt.Errorf("no valid source files found (tried main.go, bridge.go)")
+	}
+
+	fmt.Printf("Parsed %d source file(s)\n", len(files))
+
+	// First pass: collect all trigger keywords, prefix, regex, priority, description and wasm config from all files
+	globalTrigger = TriggerInfo{}
+	globalDescription = ""
+	globalWasmConfig = WasmConfig{
+		SandboxSubdir: "/",
+		Timeout:       "30s",
+	}
+
+	for _, f := range files {
+		trigger := parseGlobalTrigger(f)
+		for _, kw := range trigger.Keywords {
+			if !contains(globalTrigger.Keywords, kw) {
+				globalTrigger.Keywords = append(globalTrigger.Keywords, kw)
+			}
+		}
+		if trigger.Prefix != "" {
+			globalTrigger.Prefix = trigger.Prefix
+		}
+		if trigger.Regex != "" {
+			globalTrigger.Regex = trigger.Regex
+		}
+		if trigger.Priority != 0 {
+			globalTrigger.Priority = trigger.Priority
+		}
+
+		if desc := parseGlobalDescription(f); desc != "" {
+			globalDescription = desc
+		}
+
+		wasmConfig := parseGlobalWasmConfig(f)
+		if wasmConfig.SandboxSubdir != "/" {
+			globalWasmConfig.SandboxSubdir = wasmConfig.SandboxSubdir
+		}
+		if wasmConfig.Timeout != "30s" {
+			globalWasmConfig.Timeout = wasmConfig.Timeout
+		}
+	}
+
+	// Second pass: find all tool definitions in all files
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if fn.Name.Name == "registerTools" || strings.HasPrefix(fn.Name.Name, "register") {
+					// Parse this function for tool definitions
+					foundTools := parseRegisterToolsFunc(fn, seenUses, &pluginUses)
+					tools = append(tools, foundTools...)
+				}
 			}
 		}
 	}
@@ -635,6 +689,15 @@ func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, 
 
 	fmt.Println("\nWriting skill.yaml content:\n", sb.String())
 	return os.WriteFile(yamlPath, []byte(sb.String()), 0644)
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func escapeYAML(s string) string {

@@ -70,19 +70,13 @@ func scaffold(args []string) {
 	fmt.Printf("Scaffolding SOI plugin: %s (type=%s)\n", *name, *pluginType)
 
 	files := map[string]string{
-		"go.mod":     genGoMod(*name),
-		"skill.yaml": genSkillYAML(*name, *pluginType),
-		"tools.go":   genToolsGo(*name, *pluginType, *withSandbox),
-		"README.md":  genREADME(*name, *pluginType),
-	}
-
-	if *pluginType == "wasm" {
-		files["main.go"] = genMainGo()
-		files["main_test.go"] = genMainTestGo()
-	} else {
-		// SOI插件：用户只需写一个main.go，SDK自动处理execute循环
-		files["main.go"] = genMainGoSOI()
-		files["main_test.go"] = genMainTestGoSOI()
+		"go.mod":       genGoMod(*name),
+		"skill.yaml":   genSkillYAML(*name, *pluginType),
+		"README.md":    genREADME(*name, *pluginType),
+		"main.go":      genMainGoNew(*pluginType),
+		"bridge.go":    genBridgeGo(*name, *pluginType, *withSandbox),
+		"tools.go":     genToolsGoNew(*name, *pluginType, *withSandbox),
+		"main_test.go": genMainTestGoNew(*pluginType),
 	}
 
 	for filename, content := range files {
@@ -154,14 +148,10 @@ func wrap(args []string) {
 	files := map[string]string{
 		"go.mod":     genGoMod(name),
 		"skill.yaml": genSkillYAML(name, *pluginType),
-		"tools.go":   genWrappedToolsGo(name, *funcName, funcBody, imports, *pluginType, *withSandbox),
+		"main.go":    genMainGoNew(*pluginType),
+		"bridge.go":  genWrappedBridgeGo(name, *funcName, funcBody, imports, *pluginType, *withSandbox),
+		"tools.go":   genToolsGoNew(name, *pluginType, *withSandbox),
 		"README.md":  genREADME(name, *pluginType),
-	}
-
-	if *pluginType == "wasm" {
-		files["main.go"] = genMainGo()
-	} else {
-		files["main.go"] = genMainGoSOI()
 	}
 
 	for filename, content := range files {
@@ -191,13 +181,13 @@ func wrap(args []string) {
 // ── shared code generators ──
 
 func genGoMod(name string) string {
-	return fmt.Sprintf(`module soi.dev/soi/%s
+	return fmt.Sprintf(`module github.com/Source-of-Intelligence/soi-plugins/%s
 
 go 1.22.0
 
-require soi.dev/soi-sdk v1.0.0
+require github.com/Source-of-Intelligence/soi-sdk v1.0.0
 
-replace soi.dev/soi-sdk => ../soi-sdk
+replace github.com/Source-of-Intelligence/soi-sdk => ../soi-sdk
 `, name)
 }
 
@@ -212,6 +202,8 @@ spec:
   runtime:
     type: %s
     entry: wasm/plugin.%s
+    wasm:
+      timeout: "30s"
   provides:
     tools:
       - name: hello
@@ -224,12 +216,24 @@ spec:
 `, name, pluginType, pluginType)
 }
 
-func genMainGo() string {
+func genMainGoNew(pluginType string) string {
+	if pluginType == "soi" {
+		return `//go:build tinygo
+
+package main
+
+import sdk "github.com/Source-of-Intelligence/soi-sdk"
+
+func main() {
+	sdk.RunTinyGo()
+}
+`
+	}
 	return `//go:build !tinygo
 
 package main
 
-import sdk "soi.dev/soi-sdk"
+import sdk "github.com/Source-of-Intelligence/soi-sdk"
 
 func main() {
 	sdk.Run()
@@ -237,50 +241,43 @@ func main() {
 `
 }
 
-func genMainGoSOI() string {
-	return `package main
-
-import sdk "soi.dev/soi-sdk"
-
-func main() {
-	sdk.RunTinyGo()
-}
-`
-}
-
-func genToolsGo(name, pluginType string, withSandbox bool) string {
+func genBridgeGo(name, pluginType string, withSandbox bool) string {
 	var b strings.Builder
 	b.WriteString("package main\n\n")
 	b.WriteString("import (\n")
 	b.WriteString("\t\"encoding/json\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	b.WriteString("\n")
-	b.WriteString("\tsdk \"soi.dev/soi-sdk\"\n")
+	b.WriteString("\tsdk \"github.com/Source-of-Intelligence/soi-sdk\"\n")
 	b.WriteString(")\n\n")
+
+	b.WriteString("func init() {\n")
+	b.WriteString("\tregisterTools()\n")
+	b.WriteString("}\n\n")
 
 	b.WriteString("//export registerTools\n")
 	b.WriteString("func registerTools() {\n")
-	b.WriteString("\tsdk.RegisterToolWithDef(sdk.ToolDef{\n")
-	b.WriteString("\t\tName:        \"hello\",\n")
-	b.WriteString("\t\tDescription: \"Say hello\",\n")
-	b.WriteString("\t\tParameters: []sdk.ParamDef{\n")
-	b.WriteString("\t\t\t{Name: \"name\", Type: \"string\", Required: true, Description: \"Your name\"},\n")
-	b.WriteString("\t\t},\n")
-	b.WriteString("\t\tReturns: \"object with greeting message\",\n")
-	b.WriteString("\t}, helloHandler)\n")
+	b.WriteString("\tsdk.NewTool(\"hello\").\n")
+	b.WriteString("\t\tDesc(\"Say hello\").\n")
+	b.WriteString("\t\tParam(\"name\", \"string\", true, \"\", \"Your name\").\n")
+	b.WriteString("\t\tReturns(\"object with greeting message\").\n")
+	if withSandbox || pluginType == "soi" {
+		b.WriteString("\t\tWithSandboxFS().\n")
+	}
+	b.WriteString("\t\tRegisterSOI(helloHandler)\n")
 
 	if withSandbox || pluginType == "soi" {
 		b.WriteString("\n")
-		b.WriteString("\tsdk.RegisterSOITool(sdk.ToolDef{\n")
-		b.WriteString("\t\tName:        \"sandbox_info\",\n")
-		b.WriteString("\t\tDescription: \"Get sandbox information\",\n")
-		b.WriteString("\t\tReturns:     \"object with sandbox info\",\n")
-		b.WriteString("\t}, sandboxInfoHandler)\n")
+		b.WriteString("\tsdk.NewTool(\"sandbox_info\").\n")
+		b.WriteString("\t\tDesc(\"Get sandbox information\").\n")
+		b.WriteString("\t\tReturns(\"object with sandbox info\").\n")
+		b.WriteString("\t\tWithSandboxFS().\n")
+		b.WriteString("\t\tRegisterSOI(sandboxInfoHandler)\n")
 	}
 
 	b.WriteString("}\n\n")
 
-	b.WriteString("func helloHandler(args json.RawMessage) (interface{}, error) {\n")
+	b.WriteString("func helloHandler(args json.RawMessage, ctx *sdk.SandboxContext) (interface{}, error) {\n")
 	b.WriteString("\tvar p struct{ Name string }\n")
 	b.WriteString("\tjson.Unmarshal(args, &p)\n")
 	b.WriteString("\tif p.Name == \"\" {\n")
@@ -300,6 +297,63 @@ func genToolsGo(name, pluginType string, withSandbox bool) string {
 		b.WriteString("\t}, nil\n")
 		b.WriteString("}\n")
 	}
+
+	return b.String()
+}
+
+func genToolsGoNew(name, pluginType string, withSandbox bool) string {
+	var b strings.Builder
+	b.WriteString("package main\n\n")
+	b.WriteString("// Put your actual logic here\n\n")
+	b.WriteString("// For example:\n")
+	b.WriteString("// func doSomething(...) (..., error) {\n")
+	b.WriteString("//     ...\n")
+	b.WriteString("// }\n")
+	return b.String()
+}
+
+func genWrappedBridgeGo(name, funcName, funcBody string, imports []string, pluginType string, withSandbox bool) string {
+	var b strings.Builder
+	b.WriteString("package main\n\n")
+	b.WriteString("import (\n")
+	b.WriteString("\t\"encoding/json\"\n")
+	b.WriteString("\t\"fmt\"\n")
+	for _, imp := range imports {
+		b.WriteString("\t" + imp + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString("\tsdk \"github.com/Source-of-Intelligence/soi-sdk\"\n")
+	b.WriteString(")\n\n")
+
+	b.WriteString("func init() {\n")
+	b.WriteString("\tregisterTools()\n")
+	b.WriteString("}\n\n")
+
+	b.WriteString("//export registerTools\n")
+	b.WriteString("func registerTools() {\n")
+	b.WriteString("\tsdk.NewTool(\"run\").\n")
+	b.WriteString("\t\tDesc(\"Execute the wrapped function\").\n")
+	b.WriteString("\t\tParam(\"input\", \"string\", true, \"\", \"Input to the function\").\n")
+	b.WriteString("\t\tReturns(\"object with result\").\n")
+	if withSandbox || pluginType == "soi" {
+		b.WriteString("\t\tWithSandboxFS().\n")
+	}
+	b.WriteString("\t\tRegisterSOI(runHandler)\n")
+	b.WriteString("}\n\n")
+
+	b.WriteString("// Original function from input file\n")
+	b.WriteString(funcBody)
+	b.WriteString("\n\n")
+
+	b.WriteString("func runHandler(args json.RawMessage, ctx *sdk.SandboxContext) (interface{}, error) {\n")
+	b.WriteString("\tvar p struct{ Input string }\n")
+	b.WriteString("\tjson.Unmarshal(args, &p)\n")
+	b.WriteString(fmt.Sprintf("\tresult, err := %s(p.Input)\n", funcName))
+	b.WriteString("\tif err != nil {\n")
+	b.WriteString("\t\treturn nil, err\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn map[string]interface{}{\"result\": result}, nil\n")
+	b.WriteString("}\n")
 
 	return b.String()
 }
@@ -346,19 +400,22 @@ func genWrappedToolsGo(name, funcName, funcBody string, imports []string, plugin
 	return b.String()
 }
 
-func genMainTestGo() string {
-	return `package main
+func genMainTestGoNew(pluginType string) string {
+	if pluginType == "soi" {
+		return `package main
 
 import (
 	"encoding/json"
 	"testing"
 
-	"soi.dev/soi-sdk"
+	sdk "github.com/Source-of-Intelligence/soi-sdk"
+	vos "github.com/Source-of-Intelligence/soi-vos"
 )
 
 func TestHello(t *testing.T) {
-	argsJSON, _ := json.Marshal(map[string]interface{}{"Name": "Alice"})
-	resp := sdk.CallTool("hello", argsJSON, "", nil)
+	host := vos.NewMockHost(nil)
+	argsJSON, _ := json.Marshal(map[string]interface{}{"name": "Alice"})
+	resp := sdk.CallTool("hello", argsJSON, "", host)
 	if resp.Error != "" {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
@@ -369,23 +426,19 @@ func TestHello(t *testing.T) {
 	}
 }
 `
-}
-
-func genMainTestGoSOI() string {
+	}
 	return `package main
 
 import (
 	"encoding/json"
 	"testing"
 
-	"soi.dev/soi-sdk"
-	"soi.dev/soi-vos"
+	sdk "github.com/Source-of-Intelligence/soi-sdk"
 )
 
 func TestHello(t *testing.T) {
-	host := vos.NewMockHost(nil)
-	argsJSON, _ := json.Marshal(map[string]interface{}{"Name": "Alice"})
-	resp := sdk.CallTool("hello", argsJSON, "", host)
+	argsJSON, _ := json.Marshal(map[string]interface{}{"name": "Alice"})
+	resp := sdk.CallTool("hello", argsJSON, "", nil)
 	if resp.Error != "" {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
