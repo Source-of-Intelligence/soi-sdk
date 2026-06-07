@@ -211,20 +211,18 @@ func parseRegisterToolsFunc(fn *ast.FuncDecl, seenUses map[string]bool, pluginUs
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); ok {
 			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-				if sel.Sel.Name == "NewTool" {
-					if len(call.Args) >= 1 {
-						if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-							toolName := stripQuotes(lit.Value)
-							tool := parseToolChain(call)
-							tool.Name = toolName
-							tools = append(tools, tool)
+				// 查找最外层的RegisterSOI或RegisterSimple调用，然后从这里解析完整的链
+				if sel.Sel.Name == "RegisterSOI" || sel.Sel.Name == "RegisterSimple" {
+					// 从完整的调用链开始解析
+					tool := parseToolChain(call)
+					if tool.Name != "" {
+						tools = append(tools, tool)
 
-							// Merge uses into pluginUses
-							for _, use := range tool.Uses {
-								if !seenUses[use] {
-									*pluginUses = append(*pluginUses, use)
-									seenUses[use] = true
-								}
+						// Merge uses into pluginUses
+						for _, use := range tool.Uses {
+							if !seenUses[use] {
+								*pluginUses = append(*pluginUses, use)
+								seenUses[use] = true
 							}
 						}
 					}
@@ -248,28 +246,13 @@ func parseToolChain(call *ast.CallExpr) ToolInfo {
 	// First, parse uses from the entire call tree
 	tool.Uses = parseToolUses(call)
 
-	// Walk through the chain: NewTool(...).Desc(...).Param(...)...
+	// Collect all method calls in the chain (from right to left)
+	var methodCalls []*ast.CallExpr
 	current := call
-
 	for current != nil {
 		if sel, ok := current.Fun.(*ast.SelectorExpr); ok {
-			methodName := sel.Sel.Name
-			switch methodName {
-			case "Desc":
-				if args := extractStringArgs(current.Args); len(args) > 0 {
-					tool.Description = args[0]
-				}
-			case "Returns":
-				if args := extractStringArgs(current.Args); len(args) > 0 {
-					tool.Returns = args[0]
-				}
-			case "Param":
-				if param := parseParam(current.Args); param.Name != "" {
-					tool.Parameters = append(tool.Parameters, param)
-				}
-			}
-
-			// Move to previous in chain (X(...).Method(...) -> X(...))
+			methodCalls = append(methodCalls, current)
+			// Move to previous in chain
 			if star, ok := sel.X.(*ast.CallExpr); ok {
 				current = star
 			} else {
@@ -280,12 +263,43 @@ func parseToolChain(call *ast.CallExpr) ToolInfo {
 		}
 	}
 
+	// Now process the method calls in reverse order (from left to right)
+	// Because methodCalls[0] is RegisterSOI, methodCalls[len-1] is NewTool
+	for i := len(methodCalls) - 1; i >= 0; i-- {
+		c := methodCalls[i]
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+			methodName := sel.Sel.Name
+			switch methodName {
+			case "NewTool":
+				// 从NewTool调用中获取工具名称
+				if len(c.Args) >= 1 {
+					if lit, ok := c.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						tool.Name = stripQuotes(lit.Value)
+					}
+				}
+			case "Desc":
+				if args := extractStringArgs(c.Args); len(args) > 0 {
+					tool.Description = args[0]
+				}
+			case "Returns":
+				if args := extractStringArgs(c.Args); len(args) > 0 {
+					tool.Returns = args[0]
+				}
+			case "Param":
+				if param := parseParam(c.Args); param.Name != "" {
+					tool.Parameters = append(tool.Parameters, param)
+				}
+			}
+		}
+	}
+
 	return tool
 }
 
 func parseParam(args []ast.Expr) ParamInfo {
 	var param ParamInfo
-	if len(args) < 5 {
+	// 允许参数数量有一定灵活性（至少4个：name, type, required, default）
+	if len(args) < 4 {
 		return param
 	}
 
@@ -307,9 +321,11 @@ func parseParam(args []ast.Expr) ParamInfo {
 	// Arg 3: default value (can be nil, string, etc)
 	param.Default = extractDefaultValue(args[3])
 
-	// Arg 4: description (string)
-	if lit, ok := args[4].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-		param.Description = stripQuotes(lit.Value)
+	// Arg 4: description (string, optional)
+	if len(args) > 4 {
+		if lit, ok := args[4].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			param.Description = stripQuotes(lit.Value)
+		}
 	}
 
 	return param
