@@ -122,6 +122,26 @@ var toolRegistry = make(map[string]registeredTool)
 var soiToolRegistry = make(map[string]registeredSOITool)
 var pluginUses []string             // Plugin-level sandbox capabilities
 var providesTrigger ProvidesTrigger // Provides-level trigger configuration
+var pluginWasmConfig WasmConfig     // Plugin-level wasm configuration
+
+// WasmConfig is the plugin-level WASM configuration.
+type WasmConfig struct {
+	SandboxSubdir string // Sandbox subdirectory
+	Timeout       string // Timeout duration, e.g. "30s"
+}
+
+// GetPluginWasmConfig returns the plugin-level WASM configuration.
+func GetPluginWasmConfig() WasmConfig {
+	return pluginWasmConfig
+}
+
+// SetPluginWasmConfig sets the plugin-level WASM configuration.
+func SetPluginWasmConfig(sandboxSubdir, timeout string) {
+	pluginWasmConfig = WasmConfig{
+		SandboxSubdir: sandboxSubdir,
+		Timeout:       timeout,
+	}
+}
 
 // RegisterTool registers a regular tool (no sandbox access).
 func RegisterTool(name string, handler ToolHandler) {
@@ -407,6 +427,20 @@ func (b *Builder) WithHostEnv() *Builder {
 // 等同于 WithSandbox(sdk.HostProcess)
 func (b *Builder) WithHostProcess() *Builder {
 	return b.WithSandbox(HostProcess)
+}
+
+// WithSandboxSubdir 设置 WASM 沙箱子目录
+// 示例：WithSandboxSubdir("/") 或 WithSandboxSubdir("plugins/my-plugin")
+func (b *Builder) WithSandboxSubdir(subdir string) *Builder {
+	pluginWasmConfig.SandboxSubdir = subdir
+	return b
+}
+
+// WithTimeout 设置 WASM 执行超时时间
+// 示例：WithTimeout("30s") 或 WithTimeout("1m")
+func (b *Builder) WithTimeout(timeout string) *Builder {
+	pluginWasmConfig.Timeout = timeout
+	return b
 }
 
 // RegisterSimple 注册普通工具（无沙箱）

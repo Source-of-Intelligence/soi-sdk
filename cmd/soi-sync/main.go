@@ -50,7 +50,7 @@ func main() {
 	fmt.Printf("  [2/3] Plugin type: %s\n", *typ)
 
 	fmt.Println("  [3/3] Parsing source...")
-	tools, pluginUses, err := parseToolsFromSource(absDir)
+	tools, pluginUses, wasmConfig, err := parseToolsFromSource(absDir)
 	if err != nil {
 		fmt.Printf("Error: could not parse source: %v\n", err)
 		os.Exit(1)
@@ -70,11 +70,13 @@ func main() {
 	fmt.Printf("  Found trigger keywords: %v\n", globalTrigger.Keywords)
 	fmt.Printf("  Found trigger prefix: %s\n", globalTrigger.Prefix)
 	fmt.Printf("  Found trigger priority: %d\n", globalTrigger.Priority)
+	fmt.Printf("  Found wasm sandbox subdir: %s\n", wasmConfig.SandboxSubdir)
+	fmt.Printf("  Found wasm timeout: %s\n", wasmConfig.Timeout)
 	if globalDescription != "" {
 		fmt.Printf("  Found description: %s\n", globalDescription)
 	}
 
-	err = generateSkillYAML(absDir, *name, *version, *typ, tools, pluginUses, globalTrigger, globalDescription)
+	err = generateSkillYAML(absDir, *name, *version, *typ, tools, pluginUses, globalTrigger, globalDescription, wasmConfig)
 	if err != nil {
 		fmt.Printf("Error: could not generate skill.yaml: %v\n", err)
 		os.Exit(1)
@@ -128,10 +130,16 @@ type TriggerInfo struct {
 	Priority int
 }
 
+type WasmConfig struct {
+	SandboxSubdir string
+	Timeout       string
+}
+
 var globalTrigger TriggerInfo
 var globalDescription string
+var globalWasmConfig WasmConfig
 
-func parseToolsFromSource(dir string) ([]ToolInfo, []string, error) {
+func parseToolsFromSource(dir string) ([]ToolInfo, []string, WasmConfig, error) {
 	var tools []ToolInfo
 	seenUses := make(map[string]bool)
 	var pluginUses []string
@@ -141,14 +149,15 @@ func parseToolsFromSource(dir string) ([]ToolInfo, []string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, mainGoPath, nil, parser.ParseComments)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse file: %w", err)
+		return nil, nil, WasmConfig{}, fmt.Errorf("parse file: %w", err)
 	}
 
 	fmt.Printf("Parsed %d bytes, found %d comments\n", f.End(), len(f.Comments))
 
-	// First pass: collect all trigger keywords, prefix, regex, priority, and description from the whole file
+	// First pass: collect all trigger keywords, prefix, regex, priority, description and wasm config from the whole file
 	globalTrigger = parseGlobalTrigger(f)
 	globalDescription = parseGlobalDescription(f)
+	globalWasmConfig = parseGlobalWasmConfig(f)
 
 	// Second pass: find all tool definitions
 	for _, decl := range f.Decls {
@@ -228,6 +237,34 @@ func parseGlobalDescription(f *ast.File) string {
 	})
 
 	return desc
+}
+
+func parseGlobalWasmConfig(f *ast.File) WasmConfig {
+	config := WasmConfig{
+		SandboxSubdir: "/",
+		Timeout:       "30s",
+	}
+
+	// Walk all declarations to find WithSandboxSubdir and WithTimeout method calls
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				switch sel.Sel.Name {
+				case "WithSandboxSubdir":
+					if args := extractStringArgs(call.Args); len(args) > 0 {
+						config.SandboxSubdir = args[0]
+					}
+				case "WithTimeout":
+					if args := extractStringArgs(call.Args); len(args) > 0 {
+						config.Timeout = args[0]
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	return config
 }
 
 func parseRegisterToolsFunc(fn *ast.FuncDecl, seenUses map[string]bool, pluginUses *[]string) []ToolInfo {
@@ -498,7 +535,7 @@ func readToolsFromSkillYAML(dir string) ([]ToolInfo, []string, TriggerInfo) {
 	return nil, nil, TriggerInfo{}
 }
 
-func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, pluginUses []string, trigger TriggerInfo, description string) error {
+func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, pluginUses []string, trigger TriggerInfo, description string, wasmConfig WasmConfig) error {
 	yamlPath := filepath.Join(dir, "skill.yaml")
 
 	var sb strings.Builder
@@ -528,6 +565,11 @@ func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, 
 			sb.WriteString(fmt.Sprintf("      - %s\n", use))
 		}
 	}
+
+	sb.WriteString("    wasm:\n")
+	sb.WriteString("      sandbox:\n")
+	sb.WriteString(fmt.Sprintf("        subdir: \"%s\"\n", wasmConfig.SandboxSubdir))
+	sb.WriteString(fmt.Sprintf("      timeout: \"%s\"\n", wasmConfig.Timeout))
 
 	sb.WriteString("  provides:\n")
 
