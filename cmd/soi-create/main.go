@@ -192,13 +192,13 @@ func wrap(args []string) {
 // ── shared code generators ──
 
 func genGoMod(name string) string {
-	return fmt.Sprintf(`module github.com/Source-of-Intelligence/soi/%s
+	return fmt.Sprintf(`module soi.dev/soi/%s
 
 go 1.22.0
 
-require github.com/Source-of-Intelligence/soi-sdk v1.0.0
+require soi.dev/soi-sdk v1.0.0
 
-replace github.com/Source-of-Intelligence/soi-sdk => ../soi-sdk
+replace soi.dev/soi-sdk => ../soi-sdk
 `, name)
 }
 
@@ -230,7 +230,7 @@ func genMainGo() string {
 
 package main
 
-import sdk "github.com/Source-of-Intelligence/soi-sdk"
+import sdk "soi.dev/soi-sdk"
 
 func main() {
 	sdk.Run()
@@ -247,7 +247,7 @@ import (
 	"encoding/json"
 	"unsafe"
 
-	sdk "github.com/Source-of-Intelligence/soi-sdk"
+	sdk "soi.dev/soi-sdk"
 )
 
 func init() {
@@ -300,7 +300,7 @@ func genToolsGo(name, pluginType string, withSandbox bool) string {
 	b.WriteString("\t\"encoding/json\"\n")
 	b.WriteString("\t\"fmt\"\n")
 	b.WriteString("\n")
-	b.WriteString("\tsdk \"github.com/Source-of-Intelligence/soi-sdk\"\n")
+	b.WriteString("\tsdk \"soi.dev/soi-sdk\"\n")
 	b.WriteString(")\n\n")
 
 	b.WriteString("//export registerTools\n")
@@ -359,7 +359,7 @@ func genWrappedToolsGo(name, funcName, funcBody string, imports []string, plugin
 		b.WriteString("\t" + imp + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString("\tsdk \"github.com/Source-of-Intelligence/soi-sdk\"\n")
+	b.WriteString("\tsdk \"soi.dev/soi-sdk\"\n")
 	b.WriteString(")\n\n")
 
 	b.WriteString("//export registerTools\n")
@@ -398,7 +398,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Source-of-Intelligence/soi-sdk"
+	"soi.dev/soi-sdk"
 )
 
 func TestHello(t *testing.T) {
@@ -423,8 +423,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Source-of-Intelligence/soi-sdk"
-	"github.com/Source-of-Intelligence/soi-vos"
+	"soi.dev/soi-sdk"
+	"soi.dev/soi-vos"
 )
 
 func TestHello(t *testing.T) {
@@ -511,7 +511,7 @@ func extractFunction(src, funcName string) (string, []string) {
 	if len(importMatch) > 1 {
 		for _, line := range strings.Split(importMatch[1], "\n") {
 			line = strings.TrimSpace(line)
-			if line != "" && !strings.Contains(line, "github.com/Source-of-Intelligence/soi-sdk") {
+			if line != "" && !strings.Contains(line, "soi.dev/soi-sdk") {
 				imports = append(imports, line)
 			}
 		}

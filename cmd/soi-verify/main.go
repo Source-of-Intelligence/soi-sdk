@@ -52,7 +52,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Source-of-Intelligence/soi-sdk"
+	"soi.dev/soi-sdk"
 )
 
 func TestManifest(t *testing.T) {
