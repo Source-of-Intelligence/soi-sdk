@@ -44,6 +44,22 @@ type ToolExample struct {
 	Output string                 `json:"output" yaml:"output"`
 }
 
+// Trigger defines how a tool can be triggered.
+type Trigger struct {
+	// Keywords are words that trigger this tool (exact match or prefix)
+	Keywords []string `json:"keywords,omitempty" yaml:"keywords,omitempty"`
+	// Prefix triggers when input starts with this prefix
+	Prefix string `json:"prefix,omitempty" yaml:"prefix,omitempty"`
+	// Regex triggers when input matches this pattern
+	Regex string `json:"regex,omitempty" yaml:"regex,omitempty"`
+	// Events trigger on specific events (e.g., "file_created", "timer")
+	Events []string `json:"events,omitempty" yaml:"events,omitempty"`
+	// Conditions trigger based on context conditions
+	Conditions map[string]interface{} `json:"conditions,omitempty" yaml:"conditions,omitempty"`
+	// Priority determines trigger precedence (higher = first)
+	Priority int `json:"priority,omitempty" yaml:"priority,omitempty"`
+}
+
 // ToolDef describes a tool's metadata.
 type ToolDef struct {
 	Name        string        `json:"name" yaml:"name"`
@@ -51,7 +67,27 @@ type ToolDef struct {
 	Parameters  []ParamDef    `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 	Returns     string        `json:"returns,omitempty" yaml:"returns,omitempty"`
 	Examples    []ToolExample `json:"examples,omitempty" yaml:"examples,omitempty"`
+	Trigger     *Trigger      `json:"trigger,omitempty" yaml:"trigger,omitempty"`
+	Uses        []string      `json:"uses,omitempty" yaml:"uses,omitempty"`
 }
+
+// Predefined sandbox capability constants
+const (
+	// SandboxFS enables sandbox file system access (ReadFile / WriteFile / ListDir)
+	SandboxFS = "sandbox_fs"
+	// HostLog enables logging output (ctx.Host.Log)
+	HostLog = "host_log"
+	// HostNow enables timestamp access (ctx.Host.Now)
+	HostNow = "host_now"
+	// HostRandom enables secure random number generation (ctx.Host.Random)
+	HostRandom = "host_random"
+	// HostHTTP enables HTTP requests (ctx.Host.HTTP)
+	HostHTTP = "host_http"
+	// HostEnv enables environment variable access (ctx.Host.Env)
+	HostEnv = "host_env"
+	// HostProcess enables process management (ctx.Host.Process)
+	HostProcess = "host_process"
+)
 
 // ParamDef describes a single parameter.
 type ParamDef struct {
@@ -248,6 +284,139 @@ func (b *Builder) Example(input map[string]interface{}, output string) *Builder 
 		Output: output,
 	})
 	return b
+}
+
+// Trigger 设置工具触发条件
+// 支持以下触发方式：
+//   - Keywords: 关键词触发
+//   - Prefix: 前缀触发
+//   - Regex: 正则表达式触发
+//   - Events: 事件触发
+//   - Conditions: 条件触发
+func (b *Builder) Trigger(trigger *Trigger) *Builder {
+	b.def.Trigger = trigger
+	return b
+}
+
+// TriggerKeywords 设置关键词触发
+// 示例：TriggerKeywords("word", "docx", "document")
+func (b *Builder) TriggerKeywords(keywords ...string) *Builder {
+	if b.def.Trigger == nil {
+		b.def.Trigger = &Trigger{}
+	}
+	b.def.Trigger.Keywords = keywords
+	return b
+}
+
+// TriggerPrefix 设置前缀触发
+// 示例：TriggerPrefix("/")
+func (b *Builder) TriggerPrefix(prefix string) *Builder {
+	if b.def.Trigger == nil {
+		b.def.Trigger = &Trigger{}
+	}
+	b.def.Trigger.Prefix = prefix
+	return b
+}
+
+// TriggerRegex 设置正则表达式触发
+// 示例：TriggerRegex(`^file:\/\/.*`)
+func (b *Builder) TriggerRegex(pattern string) *Builder {
+	if b.def.Trigger == nil {
+		b.def.Trigger = &Trigger{}
+	}
+	b.def.Trigger.Regex = pattern
+	return b
+}
+
+// TriggerEvents 设置事件触发
+// 示例：TriggerEvents("file_created", "timer")
+func (b *Builder) TriggerEvents(events ...string) *Builder {
+	if b.def.Trigger == nil {
+		b.def.Trigger = &Trigger{}
+	}
+	b.def.Trigger.Events = events
+	return b
+}
+
+// TriggerConditions 设置条件触发
+// 示例：TriggerConditions(map[string]interface{}{"env": "production"})
+func (b *Builder) TriggerConditions(conditions map[string]interface{}) *Builder {
+	if b.def.Trigger == nil {
+		b.def.Trigger = &Trigger{}
+	}
+	b.def.Trigger.Conditions = conditions
+	return b
+}
+
+// TriggerPriority 设置触发优先级
+// 优先级越高的工具会优先匹配
+func (b *Builder) TriggerPriority(priority int) *Builder {
+	if b.def.Trigger == nil {
+		b.def.Trigger = &Trigger{}
+	}
+	b.def.Trigger.Priority = priority
+	return b
+}
+
+// WithSandbox 声明工具需要的沙箱能力
+// 支持的沙箱能力：
+//   - sandbox_fs : 沙箱文件系统读写 (ctx.Host.SandboxRead / SandboxWrite / SandboxList)
+//   - host_log   : 日志输出 (ctx.Host.Log)
+//   - host_now   : 时间戳 (ctx.Host.Now)
+//   - host_random: 安全随机数 (ctx.Host.Random)
+//   - host_http  : HTTP请求 (ctx.Host.HTTP)
+//   - host_env   : 环境变量 (ctx.Host.Env)
+//   - host_process: 进程管理 (ctx.Host.Process)
+//
+// 示例：
+//
+//	WithSandbox(sdk.SandboxFS, sdk.HostLog)
+//	WithSandbox(sdk.SandboxFS, sdk.HostRandom)
+func (b *Builder) WithSandbox(capabilities ...string) *Builder {
+	b.def.Uses = append(b.def.Uses, capabilities...)
+	return b
+}
+
+// WithSandboxFS 声明需要沙箱文件系统访问
+// 等同于 WithSandbox(sdk.SandboxFS)
+func (b *Builder) WithSandboxFS() *Builder {
+	return b.WithSandbox(SandboxFS)
+}
+
+// WithHostLog 声明需要日志输出能力
+// 等同于 WithSandbox(sdk.HostLog)
+func (b *Builder) WithHostLog() *Builder {
+	return b.WithSandbox(HostLog)
+}
+
+// WithHostNow 声明需要时间戳能力
+// 等同于 WithSandbox(sdk.HostNow)
+func (b *Builder) WithHostNow() *Builder {
+	return b.WithSandbox(HostNow)
+}
+
+// WithHostRandom 声明需要随机数能力
+// 等同于 WithSandbox(sdk.HostRandom)
+func (b *Builder) WithHostRandom() *Builder {
+	return b.WithSandbox(HostRandom)
+}
+
+// WithHostHTTP 声明需要HTTP请求能力
+// 等同于 WithSandbox(sdk.HostHTTP)
+func (b *Builder) WithHostHTTP() *Builder {
+	return b.WithSandbox(HostHTTP)
+}
+
+// WithHostEnv 声明需要环境变量能力
+// 等同于 WithSandbox(sdk.HostEnv)
+func (b *Builder) WithHostEnv() *Builder {
+	return b.WithSandbox(HostEnv)
+}
+
+// WithHostProcess 声明需要进程管理能力
+// 等同于 WithSandbox(sdk.HostProcess)
+func (b *Builder) WithHostProcess() *Builder {
+	return b.WithSandbox(HostProcess)
 }
 
 // RegisterSimple 注册普通工具（无沙箱）

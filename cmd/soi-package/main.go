@@ -7,13 +7,15 @@
 //
 //	go run ./cmd/soi-package --dir ./examples/calc
 //	go run ./cmd/soi-package --dir ./examples/calc --output ./dist
-//	go run ./cmd/soi-package --dir ./examples/calc --skip-build  # skip WASM re-compilation
-//	go run ./cmd/soi-package --dir ./examples/soi-demo --type soi  # force SOI type
-//	go run ./cmd/soi-package --dir ./examples/soi-demo --optimize  # run wasm-opt after build
+//	go run ./cmd/soi-package --dir ./examples/calc --skip-build  // skip WASM re-compile
+//	go run ./cmd/soi-package --dir ./examples/soi-demo --type soi  // force SOI type
+//	go run ./cmd/soi-package --dir ./examples/soi-demo --optimize  // run wasm-opt after build
+//	go run ./cmd/soi-package --dir ./examples/soi-demo --skip-sync  // skip skill.yaml sync
 package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -31,6 +33,7 @@ func main() {
 	goBin := flag.String("go", "go", "Go binary path")
 	pluginType := flag.String("type", "", "Plugin type: wasm | soi (auto-detected from skill.yaml if not set)")
 	optimize := flag.Bool("optimize", false, "Optimize WASM with wasm-opt after build")
+	skipSync := flag.Bool("skip-sync", false, "Skip auto-sync of skill.yaml")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -51,6 +54,25 @@ func main() {
 	}
 
 	name := filepath.Base(absDir)
+
+	fmt.Println()
+	fmt.Printf("  SOI Package Builder\n")
+	fmt.Printf("  Source:  %s\n", absDir)
+	fmt.Println()
+
+	// Step 0: Auto-sync skill.yaml (unless skipped)
+	if !*skipSync {
+		fmt.Println("  [0/5] Syncing skill.yaml...")
+		if err := runSync(absDir); err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: sync failed: %v\n", err)
+			fmt.Println("    Continuing without sync")
+		} else {
+			fmt.Println("    ✓  skill.yaml synced")
+		}
+	} else {
+		fmt.Println("  [0/5] Skipping sync (--skip-sync)")
+	}
+
 	version := readVersion(absDir)
 
 	// Auto-detect type from skill.yaml if not specified
@@ -63,12 +85,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println()
-	fmt.Printf("  SOI Package Builder\n")
 	fmt.Printf("  Plugin:  %s\n", name)
 	fmt.Printf("  Version: %s\n", version)
 	fmt.Printf("  Type:    %s\n", strings.ToUpper(rt))
-	fmt.Printf("  Source:  %s\n", absDir)
 	fmt.Println()
 
 	// ── 1. Build ──
@@ -79,7 +98,7 @@ func main() {
 	}
 
 	if !*skipBuild {
-		fmt.Printf("  [1/4] Building %s...\n", rt)
+		fmt.Println("  [1/5] Building plugin...")
 		if rt == "soi" {
 			if err := buildSOI(absDir); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: build: %v\n", err)
@@ -96,7 +115,7 @@ func main() {
 			fmt.Printf("    ✓  %s (%d KB)\n", filepath.Base(wasmPath), info.Size()/1024)
 		}
 	} else {
-		fmt.Println("  [1/4] Skipping build (--skip-build)")
+		fmt.Println("  [1/5] Skipping build (--skip-build)")
 		if _, err := os.Stat(wasmPath); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %s not found (build first or remove --skip-build)\n", wasmPath)
 			os.Exit(1)
@@ -105,7 +124,7 @@ func main() {
 
 	// ── 2. Optimize (optional) ──
 	if *optimize {
-		fmt.Println("  [2/4] Optimizing with wasm-opt...")
+		fmt.Println("  [2/5] Optimizing with wasm-opt...")
 		wasmOpt := findWasmOpt()
 		if wasmOpt == "" {
 			fmt.Fprintf(os.Stderr, "WARNING: wasm-opt not found, skipping optimization\n")
@@ -121,11 +140,11 @@ func main() {
 			}
 		}
 	} else {
-		fmt.Println("  [2/4] Skipping optimization (use --optimize to enable)")
+		fmt.Println("  [2/5] Skipping optimization (use --optimize to enable)")
 	}
 
 	// ── 3. Verify ──
-	fmt.Println("  [3/4] Verifying plugin...")
+	fmt.Println("  [3/5] Verifying plugin...")
 	if rt == "soi" {
 		if err := verifySOI(wasmPath); err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: verify: %v\n", err)
@@ -135,8 +154,8 @@ func main() {
 	}
 	fmt.Println("    ✓  manifest")
 
-	// ── 4. Assemble & ZIP ──
-	fmt.Println("  [4/4] Assembling package...")
+	// ── 4. Assemble ──
+	fmt.Println("  [4/5] Assembling package...")
 	pkgName := fmt.Sprintf("%s-%s", name, version)
 	pkgDir := filepath.Join(*output, pkgName)
 
@@ -154,7 +173,8 @@ func main() {
 		}
 	}
 
-	// ZIP
+	// ── 5. ZIP ──
+	fmt.Println("  [5/5] Creating ZIP...")
 	zipPath := filepath.Join(*output, pkgName+".zip")
 	if err := createZip(pkgDir, zipPath); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: zip: %v\n", err)
@@ -165,7 +185,7 @@ func main() {
 	info, _ := os.Stat(zipPath)
 	fmt.Println()
 	fmt.Printf("  ╔══════════════════════════════════╗\n")
-	fmt.Printf("  ║  Package ready!                  ║\n")
+	fmt.Printf("  ║  Package ready!                   ║\n")
 	fmt.Printf("  ║  %-32s ║\n", zipPath)
 	if info != nil {
 		fmt.Printf("  ║  Size: %d KB                    ║\n", info.Size()/1024)
@@ -176,7 +196,42 @@ func main() {
 	listZipContents(zipPath)
 }
 
-// ── Type & Version Detection ──
+func runSync(dir string) error {
+	// Find soi-sdk directory
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	// Try to find soi-sync
+	syncCmdPath := filepath.Join(wd, "cmd", "soi-sync")
+	if _, err := os.Stat(filepath.Join(syncCmdPath, "main.go")); err != nil {
+		// Try parent directories
+		syncCmdPath = filepath.Join(wd, "..", "soi-sdk", "cmd", "soi-sync")
+		if _, err := os.Stat(filepath.Join(syncCmdPath, "main.go")); err != nil {
+			syncCmdPath = filepath.Join(wd, "..", "..", "soi-sdk", "cmd", "soi-sync")
+			if _, err := os.Stat(filepath.Join(syncCmdPath, "main.go")); err != nil {
+				return fmt.Errorf("soi-sync not found")
+			}
+		}
+	}
+
+	cmd := exec.Command("go", "run", ".", "--dir", dir)
+	cmd.Dir = syncCmdPath
+	// Capture stderr for debugging
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, stderr.String())
+	}
+	return nil
+}
+
+// ==========================================
+//  Type & Version Detection
+// ==========================================
 
 func detectType(dir string) string {
 	yamlPath := filepath.Join(dir, "skill.yaml")
@@ -217,7 +272,9 @@ func readVersion(dir string) string {
 	return "1.0.0"
 }
 
-// ── Build Functions ──
+// ==========================================
+//  Build Functions
+// ==========================================
 
 func buildWASM(goBin, dir string) error {
 	os.MkdirAll(filepath.Join(dir, "wasm"), 0755)
@@ -258,7 +315,9 @@ func buildSOI(dir string) error {
 	return cmd.Run()
 }
 
-// ── wasm-opt Optimization ──
+// ==========================================
+//  wasm-opt Optimization
+// ==========================================
 
 // findWasmOpt searches for wasm-opt binary in PATH and common locations.
 func findWasmOpt() string {
@@ -298,7 +357,9 @@ func runWasmOpt(wasmOptBin, wasmPath string) error {
 	return nil
 }
 
-// ── Verify ──
+// ==========================================
+//  Verify
+// ==========================================
 
 func verifySOI(path string) error {
 	data, err := os.ReadFile(path)
@@ -319,7 +380,9 @@ func verifySOI(path string) error {
 	return nil
 }
 
-// ── File Utilities ──
+// ==========================================
+//  File Utilities
+// ==========================================
 
 func copyFile(src, dst string) {
 	srcF, err := os.Open(src)
@@ -396,7 +459,7 @@ func listZipContents(zipPath string) {
 		if f.FileInfo().IsDir() {
 			fmt.Printf("    %s/\n", f.Name)
 		} else {
-			fmt.Printf("    %-30s %5d KB\n", f.Name, f.UncompressedSize64/1024)
+			fmt.Printf("    %-32s %5d KB\n", f.Name, f.UncompressedSize64/1024)
 		}
 	}
 }
@@ -408,17 +471,19 @@ USAGE:
   soi-package --dir <plugin-dir> [flags]
 
 FLAGS:
-  --dir        Plugin project directory (required)
-  --output     Output directory for .zip (default: dist)
-  --skip-build Skip WASM compilation (use existing wasm/)
-  --go         Go binary path (default: go)
-  --type       Plugin type: wasm | soi (auto-detected from skill.yaml)
-  --optimize   Optimize WASM with wasm-opt after build (requires Binaryen)
+  --dir         Plugin project directory (required)
+  --output      Output directory for .zip (default: dist)
+  --skip-build  Skip WASM compilation (use existing wasm/)
+  --skip-sync   Skip auto-sync of skill.yaml (default: auto-sync)
+  --go          Go binary path (default: go)
+  --type        Plugin type: wasm | soi (auto-detected from skill.yaml)
+  --optimize    Optimize WASM with wasm-opt after build (requires Binaryen)
 
 EXAMPLES:
-  soi-package --dir ./examples/calc
-  soi-package --dir ./examples/hello --output ./releases
-  soi-package --dir ./examples/soi-demo --type soi --optimize
-  soi-package --dir ./examples/test-demo --skip-build
+  soi-package --dir ./my-plugin
+  soi-package --dir ./my-plugin --skip-sync
+  soi-package --dir ./my-plugin --type soi --optimize
+  soi-package --dir ./my-plugin --skip-build
+
 `)
 }
