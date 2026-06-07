@@ -80,8 +80,8 @@ func scaffold(args []string) {
 		files["main.go"] = genMainGo()
 		files["main_test.go"] = genMainTestGo()
 	} else {
-		files["main.go"] = genMainGo()
-		files["main_tinygo.go"] = genMainTinyGo()
+		// SOI插件：用户只需写一个main.go，SDK自动处理execute循环
+		files["main.go"] = genMainGoSOI()
 		files["main_test.go"] = genMainTestGoSOI()
 	}
 
@@ -161,8 +161,7 @@ func wrap(args []string) {
 	if *pluginType == "wasm" {
 		files["main.go"] = genMainGo()
 	} else {
-		files["main.go"] = genMainGo()
-		files["main_tinygo.go"] = genMainTinyGo()
+		files["main.go"] = genMainGoSOI()
 	}
 
 	for filename, content := range files {
@@ -238,57 +237,13 @@ func main() {
 `
 }
 
-func genMainTinyGo() string {
-	return `//go:build tinygo
+func genMainGoSOI() string {
+	return `package main
 
-package main
-
-import (
-	"encoding/json"
-	"unsafe"
-
-	sdk "soi.dev/soi-sdk"
-)
-
-func init() {
-	sdk.SetBuildTag("tinygo")
-}
-
-//export execute
-func execute(ptr uint32, length uint32) uint64 {
-	input := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
-
-	// Persistent copy to avoid TinyGo GC issues
-	sdk.SetInputBuf(make([]byte, length))
-	copy(sdk.GetInputBuf(), input)
-
-	// Parse request
-	var req struct {
-		Tool        string          ` + "`json:\"tool\"`" + `
-		Args        json.RawMessage ` + "`json:\"args\"`" + `
-		SandboxRoot string          ` + "`json:\"sandbox_root,omitempty\"`" + `
-	}
-	if err := json.Unmarshal(sdk.GetInputBuf(), &req); err != nil {
-		sdk.SetResultBuf(jsonError(err.Error()))
-		return sdk.PackResult(sdk.GetResultBuf())
-	}
-
-	resp := sdk.CallTool(req.Tool, req.Args, req.SandboxRoot, sdk.NewTinyGoHostAPI())
-	if resp.Error != "" {
-		sdk.SetResultBuf(jsonError(resp.Error))
-	} else {
-		sdk.SetResultBuf(resp.Output)
-	}
-	return sdk.PackResult(sdk.GetResultBuf())
-}
-
-func jsonError(msg string) []byte {
-	b, _ := json.Marshal(map[string]string{"error": msg})
-	return b
-}
+import sdk "soi.dev/soi-sdk"
 
 func main() {
-	registerTools()
+	sdk.RunTinyGo()
 }
 `
 }

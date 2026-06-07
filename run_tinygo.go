@@ -2,16 +2,29 @@
 
 // Package sdk provides TinyGo-specific helpers for SOI plugins.
 //
-// Plugins compiled with TinyGo should have a minimal main_tinygo.go:
+// TinyGo插件的最小main.go示例：
 //
-//	//go:build tinygo
-//	package main
-//	import sdk "soi.dev/soi-sdk"
-//	func init() { sdk.SetBuildTag("tinygo") }
-//	func main() { registerTools(); sdk.RunTinyGo() }
+//	func init() {
+//	    registerTools()
+//	}
 //
-// The registerTools() function (exported or not) should call sdk.RegisterSOITool().
-// sdk.RunTinyGo() handles the execute loop and result packing.
+//	//export registerTools
+//	func registerTools() {
+//	    sdk.NewTool("word_to_md").
+//	        Desc("...").
+//	        Param("source", "string", true, "", "...").
+//	        RegisterSOI(handler)
+//	}
+//
+//	func main() {
+//	    sdk.RunTinyGo()
+//	}
+//
+// SDK会自动处理：
+// - WASM导出函数execute
+// - JSON请求解析
+// - 结果打包
+// - 工具注册
 package sdk
 
 import (
@@ -22,16 +35,139 @@ import (
 var resultBuf []byte
 var inputBuf []byte
 
-// RunTinyGo starts the TinyGo SOI runtime loop.
-// It reads requests from stdin, dispatches to registered tools, and writes results.
-// This is the stdio-based fallback for TinyGo; real WASM hosts call execute directly.
+// RunTinyGo 启动TinyGo SOI运行时
+// 在TinyGo编译时，SDK会自动导出execute函数
+// 用户只需在main中调用此函数即可
 func RunTinyGo() {
-	// TinyGo plugins using stdio ABI can call this in main().
-	// For export ABI, the host calls execute directly (see below).
+	// 空函数，仅用于满足TinyGo的main函数要求
+	// 实际的execute逻辑在下面的execute导出函数中
 }
 
-// ExecuteTinyGoRequest parses a JSON request and executes the named tool.
-// It returns the raw JSON response bytes.
+// execute 是TinyGo WASM导出的主入口点
+// 由WASM运行时调用，接收JSON格式的请求
+//
+//export execute
+func execute(ptr uint32, length uint32) uint64 {
+	input := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(ptr))), length)
+
+	// 持久化副本，避免TinyGo GC问题
+	SetInputBuf(make([]byte, length))
+	copy(GetInputBuf(), input)
+
+	// 手动JSON解析，避免TinyGo json.Unmarshal的UTF-8损坏问题
+	toolVal := extractStringField(GetInputBuf(), "tool")
+	argsVal := extractRawField(GetInputBuf(), "args")
+	sandboxVal := extractStringField(GetInputBuf(), "sandbox_root")
+
+	resp := CallTool(toolVal, json.RawMessage(argsVal), sandboxVal, NewTinyGoHostAPI())
+	if resp.Error != "" {
+		SetResultBuf(jsonError(resp.Error))
+	} else {
+		SetResultBuf(resp.Output)
+	}
+	return PackResult(GetResultBuf())
+}
+
+// extractStringField 从JSON数据中提取字符串字段
+func extractStringField(data []byte, key string) string {
+	keyBytes := []byte(`"` + key + `":"`)
+	for i := 0; i <= len(data)-len(keyBytes); i++ {
+		if matchAt(data, i, keyBytes) {
+			start := i + len(keyBytes)
+			end := start
+			for end < len(data) && data[end] != '"' {
+				end++
+			}
+			if end > start {
+				return string(data[start:end])
+			}
+			break
+		}
+	}
+	return ""
+}
+
+// extractRawField 从JSON数据中提取原始字段（支持嵌套对象）
+func extractRawField(data []byte, key string) []byte {
+	keyBytes := []byte(`"` + key + `":`)
+	for i := 0; i <= len(data)-len(keyBytes); i++ {
+		if matchAt(data, i, keyBytes) {
+			start := i + len(keyBytes)
+			// 跳过空白字符
+			for start < len(data) && (data[start] == ' ' || data[start] == '\t' || data[start] == '\n' || data[start] == '\r') {
+				start++
+			}
+			if start >= len(data) {
+				return nil
+			}
+			end := start + 1
+			if data[start] == '{' || data[start] == '[' {
+				// 嵌套对象/数组
+				open := data[start]
+				var close byte
+				if open == '{' {
+					close = '}'
+				} else {
+					close = ']'
+				}
+				depth := 1
+				inString := false
+				for end < len(data) && depth > 0 {
+					c := data[end]
+					if !inString {
+						if c == open {
+							depth++
+						} else if c == close {
+							depth--
+						} else if c == '"' {
+							inString = true
+						}
+					} else {
+						if c == '"' && data[end-1] != '\\' {
+							inString = false
+						}
+					}
+					end++
+				}
+			} else if data[start] == '"' {
+				// 字符串
+				end = start + 1
+				for end < len(data) {
+					if data[end] == '"' && data[end-1] != '\\' {
+						end++
+						break
+					}
+					end++
+				}
+			} else {
+				// 其他值（数字、布尔等）
+				for end < len(data) && data[end] != ',' && data[end] != '}' {
+					end++
+				}
+			}
+			return data[start:end]
+		}
+	}
+	return nil
+}
+
+// matchAt 检查data[offset:]是否以pattern开头
+func matchAt(data []byte, offset int, pattern []byte) bool {
+	for j := 0; j < len(pattern); j++ {
+		if data[offset+j] != pattern[j] {
+			return false
+		}
+	}
+	return true
+}
+
+// jsonError 创建错误响应的JSON
+func jsonError(msg string) []byte {
+	b, _ := json.Marshal(map[string]string{"error": msg})
+	return b
+}
+
+// ExecuteTinyGoRequest 解析JSON请求并执行工具（stdio模式备选）
 func ExecuteTinyGoRequest(reqJSON []byte) []byte {
 	var req struct {
 		Tool        string          `json:"tool"`
@@ -50,7 +186,7 @@ func ExecuteTinyGoRequest(reqJSON []byte) []byte {
 	return resp.Output
 }
 
-// PackResult packs data into a (ptr<<32)|length uint64 for WASM export ABI.
+// PackResult 将数据打包为(ptr<<32)|length的uint64格式
 func PackResult(data []byte) uint64 {
 	if len(data) == 0 {
 		return 0
@@ -60,22 +196,22 @@ func PackResult(data []byte) uint64 {
 	return (ptr << 32) | length
 }
 
-// SetResultBuf stores data in the persistent result buffer to prevent GC.
+// SetResultBuf 存储结果到持久化缓冲区，防止GC
 func SetResultBuf(data []byte) {
 	resultBuf = data
 }
 
-// GetResultBuf returns the current result buffer.
+// GetResultBuf 返回当前结果缓冲区
 func GetResultBuf() []byte {
 	return resultBuf
 }
 
-// SetInputBuf stores input data in the persistent input buffer to prevent GC.
+// SetInputBuf 存储输入到持久化缓冲区，防止GC
 func SetInputBuf(data []byte) {
 	inputBuf = data
 }
 
-// GetInputBuf returns the current input buffer.
+// GetInputBuf 返回当前输入缓冲区
 func GetInputBuf() []byte {
 	return inputBuf
 }

@@ -4,12 +4,13 @@ package sdk
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/Source-of-Intelligence/soi-vos"
 )
 
 const (
-	SDKVersion = "1.0.0"
+	SDKVersion = "2.0.0"
 	ABIVersion = vos.ABIVersion
 )
 
@@ -195,4 +196,128 @@ func ExecuteTool(
 	}
 
 	return ExecuteResponse{Error: "unknown tool: " + toolName}
+}
+
+// ==========================================
+// 简化的 API (SDK v2 新增)
+// ==========================================
+
+// Builder 工具构建器 - 链式API，简化工具注册
+type Builder struct {
+	def ToolDef
+}
+
+// NewTool 创建一个新的工具构建器。如果名称为空，默认使用"execute"
+func NewTool(name string) *Builder {
+	if name == "" {
+		name = "execute"
+	}
+	return &Builder{
+		def: ToolDef{Name: name},
+	}
+}
+
+// Desc 设置工具描述
+func (b *Builder) Desc(description string) *Builder {
+	b.def.Description = description
+	return b
+}
+
+// Param 添加一个参数
+func (b *Builder) Param(name, paramType string, required bool, defaultVal interface{}, description string) *Builder {
+	b.def.Parameters = append(b.def.Parameters, ParamDef{
+		Name:        name,
+		Type:        paramType,
+		Required:    required,
+		Default:     defaultVal,
+		Description: description,
+	})
+	return b
+}
+
+// Returns 设置返回值说明
+func (b *Builder) Returns(returns string) *Builder {
+	b.def.Returns = returns
+	return b
+}
+
+// Example 添加一个使用示例
+func (b *Builder) Example(input map[string]interface{}, output string) *Builder {
+	b.def.Examples = append(b.def.Examples, ToolExample{
+		Input:  input,
+		Output: output,
+	})
+	return b
+}
+
+// RegisterSimple 注册普通工具（无沙箱）
+func (b *Builder) RegisterSimple(handler ToolHandler) {
+	RegisterToolWithDef(b.def, handler)
+}
+
+// RegisterSOI 注册SOI工具（有沙箱）
+func (b *Builder) RegisterSOI(handler SOIToolHandler) {
+	RegisterSOITool(b.def, handler)
+}
+
+// ParseArgs 解析参数到结构体 - 类型安全
+func ParseArgs[T any](args json.RawMessage) (*T, error) {
+	var result T
+	if err := json.Unmarshal(args, &result); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+	return &result, nil
+}
+
+// MustParseArgs 必须解析成功，否则返回错误
+func MustParseArgs[T any](args json.RawMessage) (*T, error) {
+	return ParseArgs[T](args)
+}
+
+// ParseArgsMap 解析参数为 map
+func ParseArgsMap(args json.RawMessage) (map[string]interface{}, error) {
+	var result map[string]interface{}
+	if err := json.Unmarshal(args, &result); err != nil {
+		return nil, fmt.Errorf("parse args map: %w", err)
+	}
+	if result == nil {
+		return make(map[string]interface{}), nil
+	}
+	return result, nil
+}
+
+// GetString 从 map 安全地获取字符串
+func GetString(m map[string]interface{}, key string, defaultValue string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return defaultValue
+}
+
+// GetFloat64 从 map 安全地获取 float64
+func GetFloat64(m map[string]interface{}, key string, defaultValue float64) float64 {
+	if v, ok := m[key]; ok {
+		if f, ok := v.(float64); ok {
+			return f
+		}
+	}
+	return defaultValue
+}
+
+// GetInt 从 map 安全地获取 int
+func GetInt(m map[string]interface{}, key string, defaultValue int) int {
+	f := GetFloat64(m, key, float64(defaultValue))
+	return int(f)
+}
+
+// GetBool 从 map 安全地获取 bool
+func GetBool(m map[string]interface{}, key string, defaultValue bool) bool {
+	if v, ok := m[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
+		}
+	}
+	return defaultValue
 }
