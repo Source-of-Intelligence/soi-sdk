@@ -70,8 +70,11 @@ func main() {
 	fmt.Printf("  Found trigger keywords: %v\n", globalTrigger.Keywords)
 	fmt.Printf("  Found trigger prefix: %s\n", globalTrigger.Prefix)
 	fmt.Printf("  Found trigger priority: %d\n", globalTrigger.Priority)
+	if globalDescription != "" {
+		fmt.Printf("  Found description: %s\n", globalDescription)
+	}
 
-	err = generateSkillYAML(absDir, *name, *version, *typ, tools, pluginUses, globalTrigger)
+	err = generateSkillYAML(absDir, *name, *version, *typ, tools, pluginUses, globalTrigger, globalDescription)
 	if err != nil {
 		fmt.Printf("Error: could not generate skill.yaml: %v\n", err)
 		os.Exit(1)
@@ -126,6 +129,7 @@ type TriggerInfo struct {
 }
 
 var globalTrigger TriggerInfo
+var globalDescription string
 
 func parseToolsFromSource(dir string) ([]ToolInfo, []string, error) {
 	var tools []ToolInfo
@@ -142,8 +146,9 @@ func parseToolsFromSource(dir string) ([]ToolInfo, []string, error) {
 
 	fmt.Printf("Parsed %d bytes, found %d comments\n", f.End(), len(f.Comments))
 
-	// First pass: collect all trigger keywords, prefix, regex, priority from the whole file
+	// First pass: collect all trigger keywords, prefix, regex, priority, and description from the whole file
 	globalTrigger = parseGlobalTrigger(f)
+	globalDescription = parseGlobalDescription(f)
 
 	// Second pass: find all tool definitions
 	for _, decl := range f.Decls {
@@ -203,6 +208,26 @@ func parseGlobalTrigger(f *ast.File) TriggerInfo {
 	})
 
 	return trigger
+}
+
+func parseGlobalDescription(f *ast.File) string {
+	desc := ""
+
+	// Walk all declarations to find Desc method calls on Builder
+	ast.Inspect(f, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+				if sel.Sel.Name == "Desc" {
+					if args := extractStringArgs(call.Args); len(args) > 0 {
+						desc = args[0]
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	return desc
 }
 
 func parseRegisterToolsFunc(fn *ast.FuncDecl, seenUses map[string]bool, pluginUses *[]string) []ToolInfo {
@@ -473,7 +498,7 @@ func readToolsFromSkillYAML(dir string) ([]ToolInfo, []string, TriggerInfo) {
 	return nil, nil, TriggerInfo{}
 }
 
-func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, pluginUses []string, trigger TriggerInfo) error {
+func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, pluginUses []string, trigger TriggerInfo, description string) error {
 	yamlPath := filepath.Join(dir, "skill.yaml")
 
 	var sb strings.Builder
@@ -483,7 +508,11 @@ func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, 
 	sb.WriteString("metadata:\n")
 	sb.WriteString(fmt.Sprintf("  name: %s\n", name))
 	sb.WriteString(fmt.Sprintf("  version: \"%s\"\n", version))
-	sb.WriteString("  description: \"SOI plugin\"\n")
+	if description != "" {
+		sb.WriteString(fmt.Sprintf("  description: \"%s\"\n", escapeYAML(description)))
+	} else {
+		sb.WriteString("  description: \"SOI plugin\"\n")
+	}
 	sb.WriteString("spec:\n")
 	sb.WriteString("  runtime:\n")
 	sb.WriteString(fmt.Sprintf("    type: %s\n", pluginType))
@@ -564,7 +593,11 @@ func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, 
 }
 
 func escapeYAML(s string) string {
+	// 首先转义反斜杠
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	// 然后转义双引号
 	s = strings.ReplaceAll(s, "\"", "\\\"")
+	// 替换换行和制表符为空格
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\t", " ")
 	return strings.TrimSpace(s)

@@ -342,6 +342,9 @@ func writeYAMLStringArrayWithIndent(b *strings.Builder, key string, values []str
 func writeToolDefYAML(b *strings.Builder, t ToolDef, indent string) {
 	b.WriteString(indent + "- name: " + t.Name + "\n")
 	b.WriteString(indent + "  description: " + quoteString(t.Description) + "\n")
+	if len(t.Uses) > 0 {
+		writeYAMLStringArrayWithIndent(b, indent+"  uses", t.Uses)
+	}
 	if len(t.Parameters) > 0 {
 		b.WriteString(indent + "  parameters:\n")
 		for _, p := range t.Parameters {
