@@ -172,10 +172,10 @@ func parseToolsFromSource(dir string) ([]ToolInfo, []string, WasmConfig, error) 
 	// Fallback to existing YAML if no tools found
 	if len(tools) == 0 {
 		fmt.Println("No tools found from AST, falling back to skill.yaml")
-		tools, pluginUses, globalTrigger = readToolsFromSkillYAML(dir)
+		tools, pluginUses, globalTrigger, globalWasmConfig = readToolsFromSkillYAML(dir)
 	}
 
-	return tools, pluginUses, nil
+	return tools, pluginUses, globalWasmConfig, nil
 }
 
 func parseGlobalTrigger(f *ast.File) TriggerInfo {
@@ -530,9 +530,12 @@ func toSnakeCase(s string) string {
 	return strings.ToLower(result.String())
 }
 
-func readToolsFromSkillYAML(dir string) ([]ToolInfo, []string, TriggerInfo) {
+func readToolsFromSkillYAML(dir string) ([]ToolInfo, []string, TriggerInfo, WasmConfig) {
 	// (Keep the existing implementation)
-	return nil, nil, TriggerInfo{}
+	return nil, nil, TriggerInfo{}, WasmConfig{
+		SandboxSubdir: "/",
+		Timeout:       "30s",
+	}
 }
 
 func generateSkillYAML(dir, name, version, pluginType string, tools []ToolInfo, pluginUses []string, trigger TriggerInfo, description string, wasmConfig WasmConfig) error {
