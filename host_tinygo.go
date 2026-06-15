@@ -123,6 +123,32 @@ func (h *TinyGoHostAPI) SandboxExec(cmd string) (*vos.ExecResult, error) {
 	return &res, nil
 }
 
+//go:wasmimport soi soi_sandbox_http
+func hostSandboxHttp(reqPtr int64, reqLen int64) int64
+
+func (h *TinyGoHostAPI) SandboxHttp(req *vos.HttpRequest) (*vos.HttpResponse, error) {
+	if req == nil {
+		return nil, nil
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	p := packBytes(payload)
+	result := hostSandboxHttp(int64(p>>32), int64(p&0xFFFFFFFF))
+	data, err := unpackBytes(uint64(result))
+	if err != nil {
+		return nil, err
+	}
+	var resp vos.HttpResponse
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &resp); err != nil {
+			return nil, err
+		}
+	}
+	return &resp, nil
+}
+
 // --- Memory packing helpers ---
 
 // Shared buffer address in WASM linear memory for host function data transfer.
