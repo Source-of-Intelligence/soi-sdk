@@ -39,7 +39,7 @@ func (h *GoHostAPI) Now() int64 {
 }
 
 //go:wasmimport soi soi_random
-func hostRandom(ptr int64, len int64) int32
+func hostRandom(ptr int64, len int64)
 
 // Random fills buf with cryptographically secure random bytes.
 func (h *GoHostAPI) Random(buf []byte) error {
@@ -47,10 +47,7 @@ func (h *GoHostAPI) Random(buf []byte) error {
 		return nil
 	}
 	p := packBytesGo(buf)
-	ret := hostRandom(int64(p>>32), int64(p&0xFFFFFFFF))
-	if ret != 0 {
-		return vos.ErrHostFunctionFailed
-	}
+	hostRandom(int64(p>>32), int64(p&0xFFFFFFFF))
 	return nil
 }
 

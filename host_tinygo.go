@@ -36,17 +36,14 @@ func (h *TinyGoHostAPI) Now() int64 {
 }
 
 //go:wasmimport soi soi_random
-func hostRandom(ptr int64, len int64) int32
+func hostRandom(ptr int64, len int64)
 
 func (h *TinyGoHostAPI) Random(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
 	p := packBytes(buf)
-	ret := hostRandom(int64(p>>32), int64(p&0xFFFFFFFF))
-	if ret != 0 {
-		return vos.ErrHostFunctionFailed
-	}
+	hostRandom(int64(p>>32), int64(p&0xFFFFFFFF))
 	return nil
 }
 

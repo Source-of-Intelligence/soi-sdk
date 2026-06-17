@@ -105,13 +105,61 @@ func BuildRust(dir, name string) error {
 		}()
 	}
 
-	// Build the Rust project
-	cmd = exec.Command("cargo", "build", "--release", "--target", "wasm32-wasip1")
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cargo build failed: %w", err)
+	// Build the Rust project with host toolchain detection.
+	// On Windows, the GNU toolchain (e.g. TDM-GCC) often ships without
+	// libgcc_eh.a, which breaks linking of build scripts and proc macros.
+	// These host-side binaries never end up in the WASM output — only the
+	// wasm32-wasip1 target matters for the final plugin.  So when the GNU
+	// host linker is broken we transparently retry under MSVC, which is
+	// always available in a standard Rust installation on Windows.
+	buildArgs := []string{"build", "--release", "--target", "wasm32-wasip1"}
+
+	// Try with default toolchain first
+	err := runCargoBuild(dir, buildArgs, nil)
+	if err != nil {
+		// Detect GNU linker failure and retry with MSVC host on Windows
+		if isGNULinkerError(err) {
+			fmt.Println()
+			fmt.Println("  NOTICE: GNU linker (gcc_eh) missing — retrying with MSVC host toolchain...")
+			fmt.Println()
+
+			// Ensure MSVC target is installed
+			msvcCheck := exec.Command("rustup", "target", "add", "x86_64-pc-windows-msvc")
+			msvcCheck.Stdout = os.Stdout
+			msvcCheck.Stderr = os.Stderr
+			msvcCheck.Run() // best-effort; if it fails cargo will report
+
+			// Force host to MSVC by using +stable-msvc or explicit HOST toolchain.
+			// The cleanest approach is to override the default toolchain via rustup.
+			// We set RUSTUP_TOOLCHAIN to select the MSVC host while still targeting wasm32-wasip1.
+			// Fallback: try +x86_64-pc-windows-msvc toolchain prefix.
+			msvcArgs := []string{"+stable-x86_64-pc-windows-msvc"}
+			msvcArgs = append(msvcArgs, buildArgs...)
+
+			// Ensure the MSVC toolchain itself is installed
+			installCmd := exec.Command("rustup", "toolchain", "install", "stable-x86_64-pc-windows-msvc")
+			installCmd.Stdout = os.Stdout
+			installCmd.Stderr = os.Stderr
+			if err := installCmd.Run(); err != nil {
+				// Try without "stable-" prefix — just use the installed MSVC target
+				msvcArgs = []string{"+x86_64-pc-windows-msvc"}
+				msvcArgs = append(msvcArgs, buildArgs...)
+			}
+
+			if err := runCargoBuild(dir, msvcArgs, nil); err != nil {
+				// Last-ditch: try the default cargo but force-host to MSVC via
+				// CARGO_TARGET_*_LINKER and a RUSTUP override — most users
+				// already have link.exe available through the Windows SDK.
+				msvcEnv := append(os.Environ(),
+					"CARGO_HOST_TARGET=x86_64-pc-windows-msvc",
+				)
+				if err := runCargoBuild(dir, buildArgs, msvcEnv); err != nil {
+					return fmt.Errorf("cargo build failed (GNU linker broken, MSVC fallback also failed): %w\n  HINT: run: rustup default stable-x86_64-pc-windows-msvc", err)
+				}
+			}
+		} else {
+			return fmt.Errorf("cargo build failed: %w", err)
+		}
 	}
 
 	// Copy the output to wasm/plugin.wasm
@@ -129,6 +177,34 @@ func BuildRust(dir, name string) error {
 		src = filepath.Join(dir, "target", "wasm32-wasip1", "release", "lib"+underscoreName+".wasm")
 	}
 	return copyFile(src, output)
+}
+
+// runCargoBuild runs cargo build with the given args and optional env overrides.
+func runCargoBuild(dir string, args []string, env []string) error {
+	cmd := exec.Command("cargo", args...)
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if env != nil {
+		cmd.Env = env
+	}
+	return cmd.Run()
+}
+
+// isGNULinkerError reports whether err indicates a missing libgcc_eh / GNU
+// linker failure (e.g. TDM-GCC without the exception handling library).
+func isGNULinkerError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	matches := []string{"gcc_eh", "libgcc_eh", "cannot find -lgcc_eh", "ld.exe:", "x86_64-w64-mingw32-gcc"}
+	for _, m := range matches {
+		if strings.Contains(msg, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // copyFile copies a file from src to dst
