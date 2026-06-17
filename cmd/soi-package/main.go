@@ -78,7 +78,7 @@ func main() {
 	// Step 0: Auto-sync skill.yaml (unless skipped)
 	if !*skipSync {
 		fmt.Println("  [0/5] Syncing skill.yaml...")
-		if err := runSync(absDir); err != nil {
+		if err := runSync(absDir, *compiler); err != nil {
 			fmt.Fprintf(os.Stderr, "WARNING: sync failed: %v\n", err)
 			fmt.Println("    Continuing without sync")
 		} else {
@@ -217,7 +217,7 @@ func main() {
 	listZipContents(zipPath)
 }
 
-func runSync(dir string) error {
+func runSync(dir, compiler string) error {
 	// Find soi-sdk directory
 	wd, err := os.Getwd()
 	if err != nil {
@@ -237,7 +237,11 @@ func runSync(dir string) error {
 		}
 	}
 
-	cmd := exec.Command("go", "run", ".", "--dir", dir)
+	args := []string{"run", ".", "--dir", dir}
+	if compiler != "" {
+		args = append(args, "--compiler", compiler)
+	}
+	cmd := exec.Command("go", args...)
 	cmd.Dir = syncCmdPath
 	// Capture both stdout and stderr for debugging
 	var stdout, stderr bytes.Buffer
