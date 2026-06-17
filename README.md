@@ -6,6 +6,7 @@
 
 - Go 1.22+
 - (optional) TinyGo for export ABI (.soi)
+- (optional) Rust 1.75+ for Rust plugins (`cargo` / `rustup target add wasm32-wasip1`)
 
 ## Quick Start
 
@@ -36,12 +37,17 @@ func main() { sdk.Run() }
 ## Build
 
 ```powershell
-# Standard Go WASM
+# Standard Go WASM (default compiler)
 $env:GOOS="wasip1"; $env:GOARCH="wasm"; $env:CGO_ENABLED="0"
 go build -o wasm/plugin.wasm .
 
-# TinyGo export ABI
+# TinyGo export ABI (smaller output)
 tinygo build -target=wasi -o wasm/plugin.soi .
+
+# Rust WASM (compiler=rust)
+rustup target add wasm32-wasip1
+cargo build --release --target wasm32-wasip1
+# then copy target/wasm32-wasip1/release/<name>.wasm to wasm/plugin.wasm
 ```
 
 ## Verification
@@ -59,11 +65,12 @@ go run ./cmd/soi-verify --tool add --args '{"A":3,"B":5}'
 - `core.go` — Core types, registry, and ExecuteTool
 - `run_stdio.go` — Stdio ABI (standard Go wasip1/wasm)
 - `host_tinygo.go` — Export ABI (TinyGo //go:build tinygo)
+- `compiler.go` — Build driver for go / tinygo / rust (used by soi-package)
 - `manifest.go` — Manifest serialization and skill.yaml generation
-- `cmd/soi-package/` — Plugin packaging tool
-- `cmd/soi-create/` — Project creation tool (scaffold/wrap)
+- `cmd/soi-package/` — Plugin packaging tool (supports --compiler go|tinygo|rust)
+- `cmd/soi-create/` — Project creation tool (scaffold/wrap, supports --compiler go|tinygo|rust)
 - `cmd/soi-verify/` — CLI verification tool
-- `examples/` — Example plugins
+- `../soi-sdk-rs/` — Rust SDK (mirrors the Go SDK; enables `--compiler rust`)
 
 ---
 
@@ -92,8 +99,14 @@ go run ./cmd/soi-verify --tool add --args '{"A":3,"B":5}'
 # 进入项目目录
 cd e:\code\soi\soi-plugin
 
-# 创建新插件（SOI类型，支持沙箱）
-soi-create scaffold --name my-plugin --type soi
+# 创建新插件（默认 Go 编译器, type=wasm）
+soi-create scaffold --name my-plugin --type wasm --compiler go
+
+# 使用 TinyGo 编译器（更小体积的 .soi 输出）
+soi-create scaffold --name my-plugin --type soi --compiler tinygo
+
+# 使用 Rust 编译器（生成 Cargo.toml / src/lib.rs）
+soi-create scaffold --name my-plugin --type wasm --compiler rust
 
 # 进入插件目录
 cd my-plugin
@@ -153,22 +166,39 @@ func main() {
 ### 4. 构建插件
 
 ```bash
-# 使用TinyGo编译
+# Go 编译器（默认）
+$env:GOOS="wasip1"; $env:GOARCH="wasm"; $env:CGO_ENABLED="0"
+go build -o wasm/plugin.wasm .
+
+# TinyGo 编译器（更小体积）
 tinygo build -target=wasi -o wasm/plugin.soi .
+
+# Rust 编译器
+rustup target add wasm32-wasip1
+cargo build --release --target wasm32-wasip1
 ```
 
 ### 5. 测试插件
 
 ```bash
-# 运行测试
+# Go / TinyGo 插件
 go test -v
+
+# Rust 插件
+cargo test
 ```
 
 ### 6. 打包插件
 
 ```bash
-# 打包为zip文件
-soi-package --dir .
+# Go 编译器（默认）
+soi-package --dir . --compiler go
+
+# TinyGo 编译器
+soi-package --dir . --compiler tinygo
+
+# Rust 编译器
+soi-package --dir . --compiler rust
 ```
 
 ## SOI 插件 vs WASM 插件
@@ -336,22 +366,70 @@ sdk.CallTool("hello", args, "", nil)  // 名称必须匹配
 
 ## 快速命令参考
 
-```bash
-# 创建插件
-soi-create scaffold --name <name> --type soi
+### 脚手架创建
 
-# 构建
+```bash
+# Go 插件（默认, wasm）
+soi-create scaffold --name my-plugin --type wasm --compiler go
+
+# Go 插件（soi 类型, 支持沙箱）
+soi-create scaffold --name my-plugin --type soi --compiler go
+
+# TinyGo 插件（更小体积）
+soi-create scaffold --name my-plugin --type wasm --compiler tinygo
+
+# Rust 插件（生成 Cargo.toml / src/lib.rs）
+soi-create scaffold --name my-plugin --type wasm --compiler rust
+```
+
+### 构建
+
+```bash
+# Go（标准 Go wasip1）
+$env:GOOS="wasip1"; $env:GOARCH="wasm"; $env:CGO_ENABLED="0"
+go build -o wasm/plugin.wasm .
+
+# TinyGo（wasi 导出 ABI）
 tinygo build -target=wasi -o wasm/plugin.soi .
 
-# 测试
+# Rust（wasm32-wasip1）
+rustup target add wasm32-wasip1
+cargo build --release --target wasm32-wasip1
+```
+
+### 测试
+
+```bash
+# Go / TinyGo
 go test -v
 
-# 打包
-soi-package --dir .
-
-# 优化构建
-tinygo build -target=wasi -o wasm/plugin.soi . -ldflags="-s -w"
+# Rust
+cargo test
 ```
+
+### 打包（通过 soi-package）
+
+```bash
+# Go
+soi-package --dir . --compiler go
+
+# TinyGo
+soi-package --dir . --compiler tinygo
+
+# Rust
+soi-package --dir . --compiler rust
+
+# 可选优化（需要 binaryen/wasm-opt）
+soi-package --dir . --compiler go --optimize
+```
+
+### 编译器对照表
+
+| `--compiler` | 源码文件 | 构建产物 | 目标 | 说明 |
+|---|---|---|---|---|
+| `go`（默认） | `main.go`, `bridge.go`, `tools.go` | `wasm/plugin.wasm` | `wasip1` | 标准 Go 工具链，兼容性最好 |
+| `tinygo` | `main.go`, `bridge.go`, `tools.go` | `wasm/plugin.soi` | `wasi` | 输出体积更小，需要安装 TinyGo |
+| `rust` | `src/lib.rs`, `Cargo.toml` | `wasm/plugin.wasm` | `wasm32-wasip1` | Rust 语言，通过 `soi-sdk-rs` 提供 ABI |
 
 ---
 

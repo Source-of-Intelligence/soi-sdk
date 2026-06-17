@@ -1,8 +1,9 @@
-//go:build !tinygo
+//go:build !tinygo && !wasip1
 
 // Package sdk provides the SOI plugin development kit for standard Go WASM plugins.
+// This file provides the stdio-based runner for local development and testing.
 //
-// Build with: GOOS=wasip1 GOARCH=wasm go build -o wasm/plugin.wasm .
+// Build with: go build -o plugin.exe .
 package sdk
 
 import (

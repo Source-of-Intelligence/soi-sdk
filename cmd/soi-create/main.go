@@ -47,6 +47,7 @@ func scaffold(args []string) {
 	fs := flag.NewFlagSet("scaffold", flag.ExitOnError)
 	name := fs.String("name", "", "Plugin name (required)")
 	pluginType := fs.String("type", "wasm", "Plugin type: wasm | soi")
+	compiler := fs.String("compiler", "go", "Compiler: go | tinygo | rust")
 	output := fs.String("output", ".", "Output directory")
 	withSandbox := fs.Bool("sandbox", false, "Include sandbox (SOI) tools")
 	fs.Usage = func() { fmt.Fprintf(os.Stderr, scaffoldUsage) }
@@ -60,6 +61,10 @@ func scaffold(args []string) {
 		fmt.Fprintf(os.Stderr, "ERROR: --type must be 'wasm' or 'soi'\n")
 		os.Exit(1)
 	}
+	if *compiler != "go" && *compiler != "tinygo" && *compiler != "rust" {
+		fmt.Fprintf(os.Stderr, "ERROR: --compiler must be 'go', 'tinygo' or 'rust'\n")
+		os.Exit(1)
+	}
 
 	dir := filepath.Join(*output, *name)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -67,16 +72,34 @@ func scaffold(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Scaffolding SOI plugin: %s (type=%s)\n", *name, *pluginType)
+	fmt.Printf("Scaffolding SOI plugin: %s (type=%s, compiler=%s)\n", *name, *pluginType, *compiler)
 
-	files := map[string]string{
-		"go.mod":       genGoMod(*name),
-		"skill.yaml":   genSkillYAML(*name, *pluginType),
-		"README.md":    genREADME(*name, *pluginType),
-		"main.go":      genMainGoNew(*pluginType),
-		"bridge.go":    genBridgeGo(*name, *pluginType, *withSandbox),
-		"tools.go":     genToolsGoNew(*name, *pluginType, *withSandbox),
-		"main_test.go": genMainTestGoNew(*pluginType),
+	var files map[string]string
+
+	if *compiler == "rust" {
+		// Rust project
+		files = map[string]string{
+			"Cargo.toml": genRustCargoToml(*name, *pluginType),
+			"skill.yaml": genSkillYAML(*name, *pluginType),
+			"README.md":  genRustREADME(*name, *pluginType),
+		}
+		os.MkdirAll(filepath.Join(dir, "src"), 0755)
+		files["src/lib.rs"] = genRustLib(*name, *pluginType, *withSandbox)
+	} else {
+		// Go project
+		files = map[string]string{
+			"go.mod":       genGoMod(*name),
+			"skill.yaml":   genSkillYAML(*name, *pluginType),
+			"README.md":    genREADME(*name, *pluginType, *compiler),
+			"bridge.go":    genBridgeGo(*name, *pluginType, *withSandbox),
+			"tools.go":     genToolsGoNew(*name, *pluginType, *withSandbox),
+			"main_test.go": genMainTestGoNew(*pluginType),
+		}
+		// Always generate both main_go.go and main_tinygo.go
+		files["main_go.go"] = genMainGoGo(*pluginType)
+		files["main_tinygo.go"] = genMainTinyGo(*pluginType)
+		// Also create main.go as a build-tag-aware symlink-style file that selects compiler
+		files["main.go"] = genMainSelector(*compiler)
 	}
 
 	for filename, content := range files {
@@ -94,13 +117,19 @@ func scaffold(args []string) {
 	fmt.Printf("  ╔══════════════════════════════════════════════════╗\n")
 	fmt.Printf("  ║  Plugin scaffolded!                              ║\n")
 	fmt.Printf("  ║  cd %s                                           ║\n", dir)
-	fmt.Printf("  ║  go mod tidy                                     ║\n")
-	if *pluginType == "soi" {
+	if *compiler == "rust" {
+		fmt.Printf("  ║  rustup target add wasm32-wasip1                  ║\n")
+		fmt.Printf("  ║  cargo build --release --target wasm32-wasip1     ║\n")
+		fmt.Printf("  ║  cargo test                                      ║\n")
+	} else if *compiler == "tinygo" {
+		fmt.Printf("  ║  go mod tidy                                     ║\n")
 		fmt.Printf("  ║  tinygo build -target=wasi -o wasm/plugin.soi . ║\n")
+		fmt.Printf("  ║  go test -v                                      ║\n")
 	} else {
+		fmt.Printf("  ║  go mod tidy                                     ║\n")
 		fmt.Printf("  ║  GOOS=wasip1 GOARCH=wasm go build -o wasm/plugin.wasm . ║\n")
+		fmt.Printf("  ║  go test -v                                      ║\n")
 	}
-	fmt.Printf("  ║  go test -v                                      ║\n")
 	fmt.Printf("  ╚══════════════════════════════════════════════════╝\n")
 }
 
@@ -112,6 +141,7 @@ func wrap(args []string) {
 	inputFile := fs.String("in", "", "Input Go file path (required)")
 	outputDir := fs.String("out", "", "Output directory (required)")
 	pluginType := fs.String("type", "wasm", "Plugin type: wasm | soi")
+	compiler := fs.String("compiler", "go", "Compiler: go | tinygo | rust")
 	withSandbox := fs.Bool("sandbox", false, "Enable sandbox (SOI) tools")
 	fs.Usage = func() { fmt.Fprintf(os.Stderr, wrapUsage) }
 	fs.Parse(args)
@@ -122,6 +152,10 @@ func wrap(args []string) {
 	}
 	if *pluginType != "wasm" && *pluginType != "soi" {
 		fmt.Fprintf(os.Stderr, "ERROR: --type must be 'wasm' or 'soi'\n")
+		os.Exit(1)
+	}
+	if *compiler != "go" && *compiler != "tinygo" && *compiler != "rust" {
+		fmt.Fprintf(os.Stderr, "ERROR: --compiler must be 'go', 'tinygo' or 'rust'\n")
 		os.Exit(1)
 	}
 
@@ -143,15 +177,27 @@ func wrap(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Wrapping function %q into SOI plugin (type=%s)\n", *funcName, *pluginType)
+	fmt.Printf("Wrapping function %q into SOI plugin (type=%s, compiler=%s)\n", *funcName, *pluginType, *compiler)
 
-	files := map[string]string{
-		"go.mod":     genGoMod(name),
-		"skill.yaml": genSkillYAML(name, *pluginType),
-		"main.go":    genMainGoNew(*pluginType),
-		"bridge.go":  genWrappedBridgeGo(name, *funcName, funcBody, imports, *pluginType, *withSandbox),
-		"tools.go":   genToolsGoNew(name, *pluginType, *withSandbox),
-		"README.md":  genREADME(name, *pluginType),
+	var files map[string]string
+
+	if *compiler == "rust" {
+		// Rust wrap is not fully supported yet, just show a message
+		fmt.Fprintf(os.Stderr, "ERROR: wrap subcommand does not support rust compiler yet\n")
+		os.Exit(1)
+	} else {
+		// Go project
+		files = map[string]string{
+			"go.mod":     genGoMod(name),
+			"skill.yaml": genSkillYAML(name, *pluginType),
+			"bridge.go":  genWrappedBridgeGo(name, *funcName, funcBody, imports, *pluginType, *withSandbox),
+			"tools.go":   genToolsGoNew(name, *pluginType, *withSandbox),
+			"README.md":  genREADME(name, *pluginType, *compiler),
+		}
+		// Always generate both main_go.go and main_tinygo.go
+		files["main_go.go"] = genMainGoGo(*pluginType)
+		files["main_tinygo.go"] = genMainTinyGo(*pluginType)
+		files["main.go"] = genMainSelector(*compiler)
 	}
 
 	for filename, content := range files {
@@ -169,10 +215,11 @@ func wrap(args []string) {
 	fmt.Printf("  ╔══════════════════════════════════════════════════╗\n")
 	fmt.Printf("  ║  Plugin wrapped!                                 ║\n")
 	fmt.Printf("  ║  cd %s                                           ║\n", *outputDir)
-	fmt.Printf("  ║  go mod tidy                                     ║\n")
-	if *pluginType == "soi" {
+	if *compiler == "tinygo" {
+		fmt.Printf("  ║  go mod tidy                                     ║\n")
 		fmt.Printf("  ║  tinygo build -target=wasi -o wasm/plugin.soi . ║\n")
 	} else {
+		fmt.Printf("  ║  go mod tidy                                     ║\n")
 		fmt.Printf("  ║  GOOS=wasip1 GOARCH=wasm go build -o wasm/plugin.wasm . ║\n")
 	}
 	fmt.Printf("  ╚══════════════════════════════════════════════════╝\n")
@@ -214,7 +261,62 @@ spec:
 `, name, pluginType, pluginType)
 }
 
+func genMainGoGo(pluginType string) string {
+	// Standard Go WASM entry (wasip1)
+	return `//go:build !tinygo && wasip1
+
+package main
+
+import sdk "github.com/Source-of-Intelligence/soi-sdk"
+
+func main() {
+	sdk.Run()
+}
+`
+}
+
+func genMainTinyGo(pluginType string) string {
+	// TinyGo WASI entry
+	return `//go:build tinygo
+
+package main
+
+import sdk "github.com/Source-of-Intelligence/soi-sdk"
+
+func main() {
+	sdk.RunTinyGo()
+}
+`
+}
+
+func genMainSelector(compiler string) string {
+	// main.go that selects the appropriate entry based on compiler
+	// This file uses build tags to switch between standard Go and TinyGo
+	return `//go:build !tinygo && wasip1
+// +build !tinygo,wasip1
+
+// This file selects the appropriate entry point based on compiler:
+// - Standard Go (wasip1): uses sdk.Run()
+// - TinyGo (wasi): uses sdk.RunTinyGo()
+//
+// For standard Go build:
+//   GOOS=wasip1 GOARCH=wasm go build -o wasm/plugin.wasm .
+//
+// For TinyGo build:
+//   tinygo build -target=wasi -o wasm/plugin.soi .
+
+package main
+
+import sdk "github.com/Source-of-Intelligence/soi-sdk"
+
+func main() {
+	sdk.Run()
+}
+`
+}
+
 func genMainGoNew(pluginType string) string {
+	// Legacy function - kept for compatibility
 	if pluginType == "soi" {
 		return `//go:build tinygo
 
@@ -449,9 +551,71 @@ func TestHello(t *testing.T) {
 `
 }
 
-func genREADME(name, pluginType string) string {
+func genRustCargoToml(name, pluginType string) string {
+	return fmt.Sprintf(`[package]
+name = "%s"
+version = "1.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+name = "%s"
+
+[dependencies]
+soi-sdk = { git = "https://github.com/Source-of-Intelligence/soi-sdk-rs" }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+`, name, sanitizeRustName(name))
+}
+
+func genRustLib(name, pluginType string, withSandbox bool) string {
+	withSandboxStr := ""
+	if withSandbox || pluginType == "soi" {
+		withSandboxStr = `.with_sandbox(&["sandbox_fs"])`
+	}
+	return fmt.Sprintf(`use soi_sdk::{soi_plugin, Builder, SandboxContext};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+#[derive(Deserialize)]
+struct Args {
+    name: String,
+}
+
+#[derive(Serialize)]
+struct Out {
+    message: String,
+}
+
+fn hello(args: Value, _ctx: &SandboxContext) -> Result<Value, String> {
+    let args: Args = serde_json::from_value(args).map_err(|e| e.to_string())?;
+    Ok(serde_json::to_value(Out {
+        message: format!("Hello, {}!", args.name),
+    }).unwrap())
+}
+
+soi_plugin! {
+    tools: [
+        Builder::new("hello")
+            .desc("Say hello")
+            .param("name", "string", true, Value::Null, "Your name")
+            %s
+            .register(hello),
+    ]
+}
+`, withSandboxStr)
+}
+
+func genREADME(name, pluginType, compiler string) string {
 	var buildCmd string
-	if pluginType == "soi" {
+	if compiler == "tinygo" {
 		buildCmd = "tinygo build -target=wasi -o wasm/plugin.soi ."
 	} else {
 		buildCmd = "GOOS=wasip1 GOARCH=wasm go build -o wasm/plugin.wasm ."
@@ -475,13 +639,50 @@ go test -v ./...
 ## Package
 
 `+"```"+`
-soi-package --dir .
+soi-package --dir . --compiler %s
 `+"```"+`
 
 ## Tools
 
 - **hello** — Say hello
-`, name, pluginType, buildCmd)
+`, name, pluginType, buildCmd, compiler)
+}
+
+func genRustREADME(name, pluginType string) string {
+	return fmt.Sprintf(`# %s
+
+A SOI WASM plugin (type: %s) written in Rust.
+
+## Build
+
+`+"```"+`
+rustup target add wasm32-wasip1
+cargo build --release --target wasm32-wasip1
+`+"```"+`
+
+## Test
+
+`+"```"+`
+cargo test
+`+"```"+`
+
+## Package
+
+`+"```"+`
+soi-package --dir . --compiler rust
+`+"```"+`
+
+## Tools
+
+- **hello** — Say hello
+`, name, pluginType)
+}
+
+// sanitizeRustName converts a name to a valid Rust crate name
+func sanitizeRustName(name string) string {
+	// Replace hyphens with underscores
+	name = strings.ReplaceAll(name, "-", "_")
+	return name
 }
 
 // ── helpers ──
@@ -554,12 +755,15 @@ USAGE:
 FLAGS:
   --name     Plugin name (required)
   --type     Plugin type: wasm | soi (default: wasm)
+  --compiler Compiler: go | tinygo | rust (default: go)
   --output   Output directory (default: .)
   --sandbox  Include sandbox (SOI) tools
 
 EXAMPLES:
   soi-create scaffold --name hello --type wasm
   soi-create scaffold --name hello --type soi --sandbox
+  soi-create scaffold --name hello --compiler tinygo
+  soi-create scaffold --name hello --compiler rust
   soi-create scaffold --name hello --output ./my-plugins
 `
 
@@ -573,10 +777,12 @@ FLAGS:
   --in       Input Go file path (required)
   --out      Output directory (required)
   --type     Plugin type: wasm | soi (default: wasm)
+  --compiler Compiler: go | tinygo (default: go)
   --sandbox  Enable sandbox (SOI) tools
 
 EXAMPLES:
   soi-create wrap --func Add --in add.go --out ./add-plugin
   soi-create wrap --func Multiply --in math.go --out ./math-plugin --type soi
   soi-create wrap --func Reverse --in strings.go --out ./str-plugin --sandbox
+  soi-create wrap --func Add --in add.go --out ./add-plugin --compiler tinygo
 `

@@ -24,14 +24,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	sdk "github.com/Source-of-Intelligence/soi-sdk"
 )
 
 func main() {
 	dir := flag.String("dir", "", "Plugin project directory (required)")
 	output := flag.String("output", "dist", "Output directory for the .zip file")
 	skipBuild := flag.Bool("skip-build", false, "Skip WASM build (use existing wasm/)")
-	goBin := flag.String("go", "go", "Go binary path")
 	pluginType := flag.String("type", "", "Plugin type: wasm | soi (auto-detected from skill.yaml if not set)")
+	compiler := flag.String("compiler", "go", "Compiler: go | tinygo | rust (default: go)")
 	optimize := flag.Bool("optimize", false, "Optimize WASM with wasm-opt after build")
 	skipSync := flag.Bool("skip-sync", false, "Skip auto-sync of skill.yaml")
 	flag.Usage = usage
@@ -42,15 +44,28 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *compiler != "go" && *compiler != "tinygo" && *compiler != "rust" {
+		fmt.Fprintf(os.Stderr, "ERROR: --compiler must be 'go', 'tinygo' or 'rust', got %q\n", *compiler)
+		os.Exit(1)
+	}
+
 	absDir, err := filepath.Abs(*dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: resolve dir: %v\n", err)
 		os.Exit(1)
 	}
 
-	if _, err := os.Stat(filepath.Join(absDir, "main.go")); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: main.go not found in %s\n", absDir)
-		os.Exit(1)
+	// Check project files based on compiler
+	if *compiler != "rust" {
+		if _, err := os.Stat(filepath.Join(absDir, "main.go")); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: main.go not found in %s\n", absDir)
+			os.Exit(1)
+		}
+	} else {
+		if _, err := os.Stat(filepath.Join(absDir, "Cargo.toml")); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Cargo.toml not found in %s\n", absDir)
+			os.Exit(1)
+		}
 	}
 
 	name := filepath.Base(absDir)
@@ -88,24 +103,30 @@ func main() {
 	fmt.Printf("  Plugin:  %s\n", name)
 	fmt.Printf("  Version: %s\n", version)
 	fmt.Printf("  Type:    %s\n", strings.ToUpper(rt))
+	fmt.Printf("  Compiler: %s\n", strings.ToUpper(*compiler))
 	fmt.Println()
 
 	// ── 1. Build ──
 	wasmPath := filepath.Join(absDir, "wasm", "plugin.wasm")
 	soiPath := filepath.Join(absDir, "wasm", "plugin.soi")
-	if rt == "soi" {
-		wasmPath = soiPath
-	}
 
 	if !*skipBuild {
 		fmt.Println("  [1/5] Building plugin...")
-		if rt == "soi" {
-			if err := buildSOI(absDir); err != nil {
+		if *compiler == "tinygo" {
+			if err := sdk.BuildTinyGo(absDir); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: build: %v\n", err)
 				os.Exit(1)
 			}
+			wasmPath = soiPath
+		} else if *compiler == "rust" {
+			if err := sdk.BuildRust(absDir, name); err != nil {
+				fmt.Fprintf(os.Stderr, "ERROR: build: %v\n", err)
+				os.Exit(1)
+			}
+			// Rust outputs to wasm/plugin.wasm
+			wasmPath = filepath.Join(absDir, "wasm", "plugin.wasm")
 		} else {
-			if err := buildWASM(*goBin, absDir); err != nil {
+			if err := sdk.BuildWasm(absDir); err != nil {
 				fmt.Fprintf(os.Stderr, "ERROR: build: %v\n", err)
 				os.Exit(1)
 			}
@@ -279,44 +300,7 @@ func readVersion(dir string) string {
 //  Build Functions
 // ==========================================
 
-func buildWASM(goBin, dir string) error {
-	os.MkdirAll(filepath.Join(dir, "wasm"), 0755)
-	cmd := exec.Command(goBin, "build", "-o", filepath.Join(dir, "wasm", "plugin.wasm"), ".")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GOOS=wasip1",
-		"GOARCH=wasm",
-		"CGO_ENABLED=0",
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func buildSOI(dir string) error {
-	os.MkdirAll(filepath.Join(dir, "wasm"), 0755)
-	tinygo, err := exec.LookPath("tinygo")
-	if err != nil {
-		for _, p := range []string{
-			filepath.Join(os.Getenv("LOCALAPPDATA"), "tinygo", "bin", "tinygo.exe"),
-			`C:\tinygo\bin\tinygo.exe`,
-			`D:\sdk\tinygo\bin\tinygo.exe`,
-		} {
-			if _, err := os.Stat(p); err == nil {
-				tinygo = p
-				break
-			}
-		}
-	}
-	if tinygo == "" {
-		return fmt.Errorf("tinygo not found. Install: https://tinygo.org/getting-started/install")
-	}
-	cmd := exec.Command(tinygo, "build", "-target=wasi", "-o", filepath.Join(dir, "wasm", "plugin.soi"), ".")
-	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
+// Note: BuildWasm and BuildTinyGo are now in sdk package (compiler.go)
 
 // ==========================================
 //  wasm-opt Optimization
@@ -478,14 +462,15 @@ FLAGS:
   --output      Output directory for .zip (default: dist)
   --skip-build  Skip WASM compilation (use existing wasm/)
   --skip-sync   Skip auto-sync of skill.yaml (default: auto-sync)
-  --go          Go binary path (default: go)
   --type        Plugin type: wasm | soi (auto-detected from skill.yaml)
+  --compiler    Compiler: go | tinygo | rust (default: go)
   --optimize    Optimize WASM with wasm-opt after build (requires Binaryen)
 
 EXAMPLES:
   soi-package --dir ./my-plugin
   soi-package --dir ./my-plugin --skip-sync
-  soi-package --dir ./my-plugin --type soi --optimize
+  soi-package --dir ./my-plugin --compiler tinygo
+  soi-package --dir ./my-plugin --compiler rust
   soi-package --dir ./my-plugin --skip-build
 
 `)
