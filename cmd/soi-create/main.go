@@ -79,11 +79,13 @@ func scaffold(args []string) {
 	if *compiler == "rust" {
 		// Rust project
 		files = map[string]string{
-			"Cargo.toml": genRustCargoToml(*name, *pluginType),
-			"skill.yaml": genSkillYAML(*name, *pluginType),
-			"README.md":  genRustREADME(*name, *pluginType),
+			"Cargo.toml":         genRustCargoToml(*name, *pluginType),
+			"skill.yaml":         genSkillYAML(*name, *pluginType),
+			"README.md":          genRustREADME(*name, *pluginType),
+			".cargo/config.toml": genRustCargoConfig(),
 		}
 		os.MkdirAll(filepath.Join(dir, "src"), 0755)
+		os.MkdirAll(filepath.Join(dir, ".cargo"), 0755)
 		files["src/lib.rs"] = genRustLib(*name, *pluginType, *withSandbox)
 	} else {
 		// Go project
@@ -118,9 +120,9 @@ func scaffold(args []string) {
 	fmt.Printf("  ║  Plugin scaffolded!                              ║\n")
 	fmt.Printf("  ║  cd %s                                           ║\n", dir)
 	if *compiler == "rust" {
-		fmt.Printf("  ║  rustup target add wasm32-wasip1                  ║\n")
-		fmt.Printf("  ║  cargo build --release --target wasm32-wasip1     ║\n")
-		fmt.Printf("  ║  cargo test                                      ║\n")
+		fmt.Printf("  ║  rustup target add wasm32-wasip1                 ║\n")
+		fmt.Printf("  ║  cargo build --release --target wasm32-wasip1    ║\n")
+		fmt.Printf("  ║  cargo test                                     ║\n")
 	} else if *compiler == "tinygo" {
 		fmt.Printf("  ║  go mod tidy                                     ║\n")
 		fmt.Printf("  ║  tinygo build -target=wasi -o wasm/plugin.soi . ║\n")
@@ -653,29 +655,51 @@ func genRustREADME(name, pluginType string) string {
 
 A SOI WASM plugin (type: %s) written in Rust.
 
+## Prerequisites
+
+1. **Switch to GNU toolchain** (required for Windows WASM builds):
+   ~~~
+   rustup default stable-x86_64-pc-windows-gnu
+   ~~~
+
+2. **Add WASM target**:
+   ~~~
+   rustup target add wasm32-wasip1
+   ~~~
+
 ## Build
 
-`+"```"+`
-rustup target add wasm32-wasip1
+~~~
 cargo build --release --target wasm32-wasip1
-`+"```"+`
+~~~
 
 ## Test
 
-`+"```"+`
+~~~
 cargo test
-`+"```"+`
+~~~
 
 ## Package
 
-`+"```"+`
+~~~
 soi-package --dir . --compiler rust
-`+"```"+`
+~~~
 
 ## Tools
 
 - **hello** — Say hello
 `, name, pluginType)
+}
+
+func genRustCargoConfig() string {
+	return `[build]
+target = "wasm32-wasip1"
+
+# HOST (x86_64-pc-windows-gnu): use rustup's self-contained mingw toolchain.
+# This avoids missing libgcc_eh issues with system TDM-GCC.
+[target.x86_64-pc-windows-gnu]
+linker = "rustup run stable-x86_64-pc-windows-gnu x86_64-w64-mingw32-gcc"
+`
 }
 
 // sanitizeRustName converts a name to a valid Rust crate name
